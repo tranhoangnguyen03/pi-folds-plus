@@ -1,0 +1,57 @@
+{
+  "name": "pi-fold",
+  "version": "4.3.0",
+  "description": "Lossless context folding for the Pi coding agent: only the oldest context changes; the fresh window stays untouched.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "context",
+    "context-management",
+    "folding",
+    "coding-agent"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./extensions/index.js",
+    "./package.json": "./package.json"
+  },
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shaneconner/fold.git"
+  },
+  "bugs": "https://github.com/shaneconner/fold/issues",
+  "homepage": "https://github.com/shaneconner/fold#readme",
+  "author": "Shane Conner",
+  "license": "MIT",
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "lint": "eslint . --max-warnings 0",
+    "test": "node tests/verify.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@stylistic/eslint-plugin": "^5.10.0",
+    "@typescript-eslint/eslint-plugin": "^8.66.0",
+    "@typescript-eslint/parser": "^8.66.0",
+    "eslint": "^10.8.0",
+    "globals": "^17.9.0",
+    "jiti": "^2.7.0"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  }
+}

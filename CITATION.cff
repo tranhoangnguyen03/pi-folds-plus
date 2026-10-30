@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use pi-fold, cite it as below. To cite the research, use the preferred citation: it is the most recent campaign and cites the three before it."
+title: "pi-fold"
+abstract: "Lossless context folding for Pi. Finished spans of a session transcript collapse in place into short briefs; the exact originals stay on disk, addressed and verified by SHA-256. Peek reads history without thinking blocks, and expand restores the original messages byte for byte. Folding is automatic and needs no agent participation."
+type: software
+authors:
+  - family-names: Conner
+    given-names: Shane
+version: 4.3.0
+date-released: 2026-10-26
+license: MIT
+repository-code: "https://github.com/shaneconner/fold"
+url: "https://shaneconner.com/projects/pi-fold/"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22142456
+    description: "The current campaign, with data and figure sources (concept DOI, resolves to the latest version)"
+keywords:
+  - LLM agents
+  - context management
+  - context window
+  - compaction
+  - prompt caching
+  - context folding
+preferred-citation:
+  type: report
+  title: "pi-fold: Rotation and Retention"
+  authors:
+    - family-names: Conner
+      given-names: Shane
+  year: 2026
+  month: 8
+  doi: 10.5281/zenodo.22142456
+  publisher:
+    name: Zenodo

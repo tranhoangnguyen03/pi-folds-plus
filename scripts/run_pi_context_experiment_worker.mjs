@@ -1,0 +1,835 @@
+#!/usr/bin/env node
+
+// One fold-vs-compaction run of one arm: a single real Pi session, one user message,
+// externally paced stages, artifact-only evidence. Derived from
+// the retired soak worker (in git history through 09a4ea5); the session-driving
+// machinery is unchanged and
+// the archive stages are replaced by the staged repo-comprehension workload.
+
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  EXPERIMENT_ALLOWED_TOOLS,
+  EXPERIMENT_BEHAVIORAL_MODE,
+  EXPERIMENT_CLOSED_BOOK_LABEL,
+  EXPERIMENT_MARKER_ENTRY,
+  closedBookPrompt,
+  closedBookQuestions,
+  closedBookSystemPrompt,
+  EXPERIMENT_CANON_EXTRA_TOOLS,
+  EXPERIMENT_PIFOLD_EXTRA_TOOLS,
+  EXPERIMENT_PROTOCOL_VERSION,
+  EXPERIMENT_PROVIDER_RETRY,
+  EXPERIMENT_RUNNER_MODE,
+  EXPERIMENT_TERMINAL_STABILIZATION_MS,
+  EXPERIMENT_TOOL_NAME,
+  CONTEXT_EVENT_SUFFIX,
+  armRuntimeConfiguration,
+  assertExperiment,
+  compactionReserveTokens,
+  compactionTriggerShare,
+  corpusManifestSha256,
+  endBlockPrompt,
+  isWindowOverflow,
+  receiptLens,
+  validateExperimentManifest,
+  validateExperimentRunConfig,
+} from "./lib/pi_context_experiment.mjs";
+import {
+  SANDBOX_PATHS,
+  appendRunChannel,
+  deleteHarnessSource,
+  harnessSourceRemains,
+  runChannelAppendCount,
+  validateSandboxPlan,
+  writeRunChannelDocument,
+} from "./lib/pi_context_sandbox.mjs";
+import {
+  assertSanitizedRuntimeEnvironment,
+  SOAK_SANITIZED_ENV_MARKER,
+  directoryTreeSha256,
+  fileSha256,
+  monotonicMs,
+  PI_INSTALL_ROOT,
+  processStartTicks,
+  readJson,
+  sha256Json,
+  sha256Text,
+  verifySourceHashes,
+} from "./lib/pi_context_soak_attestation.mjs";
+
+const PROJECT = dirname(dirname(fileURLToPath(import.meta.url)));
+const PI_ROOT = PI_INSTALL_ROOT;
+const configPath = process.argv[2];
+assertExperiment(configPath && existsSync(configPath), "Experiment worker requires a run config path");
+const config = validateExperimentRunConfig(JSON.parse(readFileSync(configPath, "utf8")));
+// Taken now, because the config lives inside the harness copy and that copy is
+// deleted before the model takes a turn. The marker entry still identifies the
+// exact bytes this run was configured with; it just cannot re-read them.
+const configSha256 = fileSha256(configPath);
+assertSanitizedRuntimeEnvironment(process.env);
+// AND THEN IT GOES (2026-08-25). `PI_FOLD_SANITIZED` is the eighth variable in an environment
+// of eight, and it names the project under test and asserts that something was cleaned, which
+// is two facts the model has no ordinary way to learn. Its only reader in the namespace is the
+// assertion on the line above, so it is deleted the moment that assertion has passed, before
+// any session exists and long before the model's first turn. The supervisor still SETS it, so
+// a worker that starts without it still fails by name.
+delete process.env[SOAK_SANITIZED_ENV_MARKER];
+// INSIDE ITS OWN MOUNT NAMESPACE (Shane 2026-08-21). This used to assert the
+// worker was a direct child of the attested supervisor by pid and start ticks.
+// Inside a PID namespace there is no host pid to compare: the worker is a child
+// of bubblewrap's own init, which is pid 1. The supervisor keeps the stronger
+// half of that proof anyway, because it holds the spawned child handle itself.
+// What is worth asserting HERE is the property the run depends on, that the
+// filesystem this process sees is the one the sandbox builder laid out. A worker
+// that somehow started outside it would see host paths in its own config.
+assertExperiment(process.ppid === 1 && config.runDir === undefined &&
+  config.repoDir === SANDBOX_PATHS.work && config.sessionDir === SANDBOX_PATHS.session,
+"Experiment worker is not running inside its own mount namespace");
+
+const workerDependencyHashes = {
+  piPackageJson: fileSha256(join(PI_ROOT, "package.json")),
+  piDistTree: directoryTreeSha256(join(PI_ROOT, "dist")),
+  piNodeModulesTree: directoryTreeSha256(join(PI_ROOT, "node_modules")),
+  nodeExecutable: fileSha256(process.execPath),
+};
+assertExperiment(JSON.stringify(workerDependencyHashes) === JSON.stringify(config.dependencyHashes),
+  "Experiment worker dependency hashes differ from its supervisor attestation");
+verifySourceHashes(PROJECT, config.sourceHashes);
+
+const {
+  createAgentSession,
+  DefaultResourceLoader,
+  getAgentDir,
+  ModelRuntime,
+  SessionManager,
+  SettingsManager,
+} = await import(pathToFileURL(join(PI_ROOT, "dist", "index.js")));
+const jitiPath = join(PI_ROOT, "node_modules", "jiti", "lib", "jiti.mjs");
+const { createJiti } = await import(pathToFileURL(jitiPath));
+const jiti = createJiti(import.meta.url, {
+  // NO TRANSPILE CACHE (Shane 2026-08-21). jiti writes compiled .ts next to the
+  // project's node_modules by default, and inside the namespace that path does not
+  // exist, so it falls back to TMPDIR: the model's own scratch. The first full pair
+  // was killed at stage 24 of 64 when the audit found
+  // scripts-pi_context_experiment_extension.<hash>.mjs sitting in /tmp/jiti, naming
+  // pifold ten times, nativefence three and native compaction twice. No seeded value
+  // was in it, so this is test-awareness rather than an answer leak, but it is the
+  // surface gate 62 exists to deny and it survived the harness deletion, because
+  // jiti had already copied it somewhere the deletion does not reach.
+  fsCache: false,
+  alias: {
+    "@earendil-works/pi-coding-agent": join(PI_ROOT, "dist", "index.js"),
+    // The fold editor's renderer imports Pi's TUI package. It resolves normally in the
+    // checkout, and inside the namespace only aliased names resolve at all.
+    "@earendil-works/pi-tui": join(PI_ROOT, "node_modules", "@earendil-works", "pi-tui", "dist", "index.js"),
+    typebox: join(PI_ROOT, "node_modules", "typebox", "build", "index.mjs"),
+  },
+});
+const { createPiContextExperimentExtension } = await jiti.import(
+  join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"),
+);
+const { materializeActiveContextState, recoverFoldMessages } = await jiti.import(
+  join(PROJECT, "extensions", "active-context.ts"),
+);
+const { PI_FOLD_STATE_ENTRY, PI_FOLD_FOLD_RECORD_ENTRY } = await jiti.import(
+  join(PROJECT, "scripts", "lib", "pi_fold_identity.mjs"),
+);
+// THE CANON CONDITION (Shane 2026-08-26): the pi-canon extension is imported from the
+// harness copy, so it is resident before the deletion and gone from disk before the first
+// turn, exactly like the rest of the graph. Its store root sits under the sandbox home:
+// writable, model-reachable only through its own tool or ordinary shellwork, and captured
+// byte for byte by the home seal either way.
+const registerPiCanon = config.canonMemory === true
+  ? (await jiti.import(join(PROJECT, "canon", "canon.ts"))).registerPiCanon
+  : null;
+verifySourceHashes(PROJECT, config.sourceHashes);
+
+// A closed-book session runs the SAME worker scaffolding (readiness, watchdog,
+// quiescence, manifest, report) with the workload swapped for the bare question
+// list: no extension, no tools, no checkout, one user message.
+const closedBook = config.sessionType === EXPERIMENT_CLOSED_BOOK_LABEL;
+const armRuntime = closedBook
+  ? { activeContextEnabled: false, nativeCompactionEnabled: false, toleratesOverflow: false }
+  : armRuntimeConfiguration(config.arm);
+const plan = validateSandboxPlan(readJson(config.planPath));
+assertExperiment(plan.planSha256 === config.planSha256 && plan.mode === config.mode &&
+  plan.repo.commit === config.targetCommit, "Stage plan does not match the run config pin");
+
+// Pin the checkout: every byte this run will read is the byte that was staged.
+// A closed-book session has no checkout to pin; its corpus statement is the plan's.
+const stagedFiles = plan.files;
+const observed = closedBook ? [] : stagedFiles.map((file) => {
+  const path = join(config.repoDir, file.path);
+  assertExperiment(existsSync(path), `Pinned checkout is missing ${file.path}`);
+  return { path: file.path, sha256: sha256Text(readFileSync(path, "utf8")) };
+});
+const checkoutSha256 = closedBook ? null : corpusManifestSha256(observed);
+assertExperiment(closedBook || checkoutSha256 === config.targetTreeSha256,
+  "Pinned checkout does not reproduce the staged corpus fingerprint");
+
+// THE HARNESS DELETES ITS OWN SOURCE (Shane 2026-08-21). Every module above is
+// resident, the plan and config have been read, and the checkout is attested, so
+// nothing reads these bytes again. What goes is a description of the experiment
+// sitting where `grep` can reach it: this file names the arms, the resume
+// contract and the end block, and the config beside it carries the exam's own
+// text. Restoring the stock tool surface is what makes that intolerable, and the
+// model has not taken a turn yet. The mount point itself cannot be removed from
+// inside, so the contents go and an empty directory stays.
+deleteHarnessSource();
+assertExperiment(harnessSourceRemains().length === 0,
+  "The harness source survived its own deletion, so the model can read the protocol");
+
+// NO MEMORY DIRECTION (Shane 2026-08-14). This prompt used to say "keep an exact
+// working memory of the identifiers, paths and line positions you have seen",
+// which named the three things the probes ask about, on every request, in both
+// arms. That is the hoarding instruction the probe wording was cleaned of, sitting
+// one layer up and reaching far more requests: gate 62 was only scanning stage
+// surfaces and never read this one. What the assignment IS stays; how to remember
+// it is the thing under measurement and is no longer supplied.
+//
+// NO TOOL DIRECTION EITHER (Shane 2026-08-21). This prompt also said "You may use
+// the read tool on files inside this checkout whenever you need to", which named
+// one tool of the seven Pi ships and fenced attention to the checkout. Both were
+// artefacts of the three-tool surface: the model now has stock Pi and a sandbox to
+// navigate, the schemas describe themselves, and which tool it reaches for is part
+// of what the run measures rather than something to supply.
+function workloadSystemPrompt() {
+  return [
+    "You are a careful software analyst working through a repository.",
+    "Read what you are given accurately and write the deliverables you are asked for.",
+  ].join(" ");
+}
+
+// THERE IS NO WORKLOAD PROMPT AND NO RESUME PROMPT (2026-08-25).
+//
+// The workload prompt said "Begin the staged repository assignment with key <hex>. Call
+// repo_stage with the current key to receive each stage ... follow each NEXT_KEY until END.
+// Do not skip, guess, duplicate, or combine stages. Complete this as one continuous run."
+// Every clause of it described the delivery protocol, and there is no delivery protocol any
+// more: STAGE 1 IS THE FIRST USER MESSAGE, which is what a person working with an agent
+// actually sends. The system prompt carries the only framing left.
+//
+// The resume prompt went with the thing that needed it. Resumes existed because the run was
+// ONE turn: a model that stopped early had to be pushed on, and a fence compaction aborted
+// the live turn and had to be recovered from. Turns end after every stage by design now, so
+// stopping is the expected shape rather than a fault to nudge past. Its dose was 5 to 10 per
+// native run against exactly 0 for every pifold run, which made the priming a cross-arm
+// asymmetry; de-primed to say nothing useful, it instead left an arm that had compacted
+// unable to find its way back to the delivery channel at all (sol-20260825-v5smoke3,
+// nativefence 5/8, worker-resume-bound). Both failure modes are gone with the mechanism.
+
+function lastConversationalMessage(entries) {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    if (entries[index]?.type === "message") return entries[index];
+  }
+  return null;
+}
+
+async function waitForDurableTerminalQuiescence(manager, session, timeoutMs = EXPERIMENT_TERMINAL_STABILIZATION_MS) {
+  const deadline = monotonicMs() + timeoutMs;
+  let priorIdentity = null;
+  let stableChecks = 0;
+  while (monotonicMs() < deadline) {
+    const branch = manager.getBranch();
+    const terminal = lastConversationalMessage(branch);
+    const message = terminal?.message;
+    const settled = message?.role === "assistant" && session.isStreaming === false &&
+      session.pendingMessageCount === 0;
+    const identity = settled ? `${branch.length}:${terminal.id}` : null;
+    if (identity && identity === priorIdentity) stableChecks += 1;
+    else stableChecks = 0;
+    if (settled && stableChecks >= 4) return { terminal, terminalMessage: message };
+    priorIdentity = identity;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error("Terminal provider state did not become durably quiescent");
+}
+
+const workerStartedWallMs = Date.now();
+const workerStartedMonotonicMs = monotonicMs();
+const workerPid = process.pid;
+const workerStartTicks = processStartTicks(workerPid);
+// NAMES, NOT PATHS (2026-08-25). The run directory is not in the namespace any more: the
+// supervisor opens each of these on the HOST and hands the descriptor down, so the files land
+// exactly where every reader has always found them and the worker no longer needs a directory
+// it shares with the model in order to write them.
+const READY_CHANNEL = "worker-ready.json";
+const REPORT_CHANNEL = "worker-report.json";
+const FAILURE_CHANNEL = "failure-latch.jsonl";
+let manager;
+let session;
+let report;
+let deadlineFired = false;
+let overflow = null;
+// THE DELIVERY COUNTER IS A COUNTER (2026-08-25). It used to walk `ipc/responses/stage-NN`
+// because the model drove delivery and the worker could only infer how far it had got. The
+// worker drives it now, so it simply knows. That also retires the coupling gate 74 records:
+// the response files are truncated rather than unlinked BECAUSE this walk needed them to
+// survive as receipts, and a smoke run that deleted them once read zero all session.
+let stagesDeliveredCount = 0;
+const stagesDelivered = () => stagesDeliveredCount;
+// COUNTED, NOT RE-READ. This used to read the latch file back and count its lines, which was
+// only ever used to render a number inside an assertion message, and reading a file the worker
+// itself wrote is exactly the shape the descriptor change exists to remove. The count is kept
+// by the channel every writer inside the namespace goes through, so the extension's own
+// latches are included exactly as the line count included them.
+const latchedFailures = () => runChannelAppendCount(FAILURE_CHANNEL);
+// THE FENCE, THE RESUME AND THE RESUME BOUND ARE ALL GONE (2026-08-25), and they were one
+// chain. `compact` aborts the live turn as its first act, so every fence crossing ended the
+// turn mid-tool-call and the fenced arm had to be prompted again or stop there; that resume
+// is what primed the model, once per compaction, 1:1 with fence share; and the resume bound
+// existed because a resume could buy no progress forever (sol-20260815-hidden native rep 1:
+// 1,761 provider responses, $127.68, zero stages, 4.3 hours, ended only by an outside
+// SIGTERM). Delivering stages as user messages removes the cause: turns end after every
+// stage, Pi compacts on its own threshold at its own boundary, nothing aborts anything, and
+// there is nothing to resume. Gates 56 and 72 are retired with the mechanism they measured;
+// their numbers stay spent.
+
+// A KILLED WORKER STILL WRITES ITS REPORT.
+//
+// The supervisor sends SIGTERM when its own deadline passes, and Node's default handler
+// ends the process there and then: the `finally` at the bottom of this file that writes
+// `worker-report.json` does not run, because a signal is not an unwound stack. So a run
+// killed at the deadline left no report, and `adjudicate` refuses a run without one
+// ("Run is incomplete: missing worker-report.json"). sol-20260812 rep 7's pifold arm lost
+// six hours that way: it released all 64 of 64 stages, folded 27 commits with every
+// receipt paid and no suspension, spent 281 further minutes recovering its own evidence
+// through 83 distinct peeks, and none of it could be adjudicated or reported beside the
+// native arm that ran in the same provider window. The evidence was all on disk. The one
+// file that makes it readable was the one the kill prevented.
+//
+// This does not rescue the run, and it must not read as one: the report says ok false,
+// names the signal, and the run still fails. It rescues the EVIDENCE, which is the thing
+// six hours of provider spend actually bought.
+const writeSignalReport = (signal) => {
+  try {
+    writeRunChannelDocument(REPORT_CHANNEL, `${JSON.stringify({
+      ok: false,
+      requiresIndependentAdjudication: true,
+      version: 1,
+      runId: config.runId,
+      arm: config.arm,
+      workerPid,
+      workerStartTicks,
+      workerStartedWallMs,
+      workerStartedMonotonicMs,
+      workerFinishedWallMs: Date.now(),
+      workerFinishedMonotonicMs: monotonicMs(),
+      sessionId: manager?.getSessionId?.() ?? null,
+      sessionFile: manager?.getSessionFile?.() ?? null,
+      overflow,
+      foldSummary: null,
+      terminal: null,
+      deadlineFired,
+      // The distinguishing fact, and the reason this file is not a normal report: the run
+      // was ended from outside rather than by anything the session did.
+      terminatedBySignal: signal,
+      error: { message: `Experiment worker terminated by ${signal}` },
+    }, null, 2)}\n`);
+  } catch { /* Already written by the ordinary path, or the channel is gone. */ }
+  process.exit(1);
+};
+for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => writeSignalReport(signal));
+
+try {
+  const piVersion = JSON.parse(readFileSync(join(PI_ROOT, "package.json"), "utf8")).version;
+  const modelRuntime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false });
+  const discoveredModel = modelRuntime.getModel(config.model.provider, config.model.id);
+  assertExperiment(discoveredModel && Number.isSafeInteger(discoveredModel.contextWindow) &&
+    discoveredModel.contextWindow > 0,
+  `Pinned model ${config.model.provider}/${config.model.id} is unavailable`);
+  // The descriptor's output maximum is now the only one in play, so a descriptor that
+  // declares none is a configuration this run cannot seal honestly rather than one to
+  // paper over with a number of our own.
+  assertExperiment(Number.isSafeInteger(discoveredModel.maxTokens) && discoveredModel.maxTokens > 0,
+    `Pinned model ${config.model.provider}/${config.model.id} declares no output maximum`);
+  const modelDescriptorSha256 = sha256Json(discoveredModel);
+  // NO output ceiling of our own (Shane 2026-08-11). The descriptor's own maxTokens is
+  // what the model says it can write; anything we put here is a guess that truncates the
+  // answer instead of shortening it. This line used to read 4,096, which ended rep 1 on
+  // stopReason "length", and the response was to raise it to 16,384 rather than to ask why
+  // a ceiling was here at all. Pi still sends a value, because it derives one per request
+  // as contextWindow - estimate - 4,096; that arithmetic is the run's business and is
+  // recorded and latched on, but the descriptor's number is the only one we supply.
+  const model = discoveredModel;
+  const systemPrompt = closedBook ? closedBookSystemPrompt() : workloadSystemPrompt();
+
+  // ITS OWN DIRECTORY, holding one file. The session used to land in the run
+  // directory itself, beside the run config that named the plan holding every
+  // graded answer, which is the chain five sealed runs walked. An agent looking
+  // for its own history now finds its own history and nothing else.
+  manager = SessionManager.create(config.repoDir, config.sessionDir);
+  // THE MARKER'S PAYLOAD NAMES NOTHING (2026-08-25). It carried runId, campaignId and arm,
+  // written into the one file the comment above invites the model toward, so opening its own
+  // history told it there was a campaign, that arms were being compared, and which one it was
+  // in (the run id embeds the arm and the repetition). No reader ever used those three fields:
+  // the adjudicator matches on `worker.markerId` and `customType`, and the extension finds the
+  // entry by customType alone. The two hashes stay because they are opaque and are what the
+  // seal is built on. The customType STRING is a separate leak and is handled where it lives.
+  const markerId = manager.appendCustomEntry(EXPERIMENT_MARKER_ENTRY, {
+    version: 1,
+    configSha256,
+    planSha256: config.planSha256,
+    createdWallMs: Date.now(),
+  });
+
+  // WHERE PI DECIDES TO SHED CONTEXT. Derived, not Pi's default: on this descriptor the
+  // default reserve puts the trigger above the run's own serving budget, so the fence
+  // reaches the window first and a managed arm never sees the hook at all. Both arms take
+  // the same trigger, which is what makes the pairing a pairing.
+  const compactionTrigger = compactionReserveTokens({
+    descriptorWindow: discoveredModel.contextWindow,
+    servingBudgetTokens: config.providerInputBudget ?? discoveredModel.contextWindow,
+    share: compactionTriggerShare(config.mode),
+  });
+  // The arm IS this settings object plus the extension's conditional registration.
+  const isolatedSettings = SettingsManager.inMemory({
+    compaction: {
+      enabled: armRuntime.nativeCompactionEnabled,
+      reserveTokens: compactionTrigger.reserveTokens,
+    },
+    branchSummary: { skipPrompt: true },
+    // Pinned transport: "auto" rides WebSocket delta requests whose connection drops
+    // re-send the full context cold. Old run configs carry no key and keep Pi's default.
+    ...(config.transport === undefined ? {} : { transport: config.transport }),
+    // Every arm gets the same weather budget, so surviving a Codex overload is not a
+    // difference between arms.
+    retry: { ...EXPERIMENT_PROVIDER_RETRY },
+  });
+  // THE HANDLE IS CAPTURED, not constructed inline, because the worker now DRIVES stage
+  // delivery through it. The same object is what Pi loads as the extension: Pi reads `name`
+  // and `factory`, and `deliverStage` and `collectPendingArtifact` ride alongside so the
+  // event stream keeps exactly one writer (its records carry an ordinal and a hash chain).
+  const experiment = closedBook ? null : createPiContextExperimentExtension(config);
+  const loader = new DefaultResourceLoader({
+    cwd: config.repoDir,
+    agentDir: getAgentDir(),
+    settingsManager: isolatedSettings,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt,
+    appendSystemPrompt: [],
+    extensionFactories: closedBook ? [] : [
+      experiment,
+      ...(registerPiCanon === null ? [] : [{
+        name: "pi-canon",
+        factory: (pi) => registerPiCanon(pi, { root: join(SANDBOX_PATHS.home, ".canon") }),
+      }]),
+    ],
+  });
+  await loader.reload();
+  assertExperiment(loader.getAppendSystemPrompt().length === 0,
+    "Experiment resource loader discovered an external appended system prompt");
+  const created = await createAgentSession({
+    cwd: config.repoDir,
+    resourceLoader: loader,
+    sessionManager: manager,
+    modelRuntime,
+    model,
+    settingsManager: isolatedSettings,
+    thinkingLevel: config.model.effort,
+  });
+  session = created.session;
+  assertExperiment(!(created.extensionsResult?.errors ?? []).length,
+    `Experiment extension load failed: ${JSON.stringify(created.extensionsResult?.errors)}`);
+  await session.bindExtensions({ mode: "print" });
+  const settings = session.settingsManager.getCompactionSettings();
+  assertExperiment(settings.enabled === armRuntime.nativeCompactionEnabled,
+    `Arm ${config.arm} did not get its compaction configuration: ${JSON.stringify(settings)}`);
+  assertExperiment(settings.reserveTokens === compactionTrigger.reserveTokens,
+    `Arm ${config.arm} did not get its compaction trigger: ${JSON.stringify(settings)}`);
+  assertExperiment(session.settingsManager.getTransport() === (config.transport ?? "auto"),
+    `Run transport pin did not reach the session: ${session.settingsManager.getTransport()}`);
+  const retrySettings = session.settingsManager.getRetrySettings();
+  assertExperiment(retrySettings.enabled === EXPERIMENT_PROVIDER_RETRY.enabled &&
+    retrySettings.maxRetries === EXPERIMENT_PROVIDER_RETRY.maxRetries &&
+    retrySettings.baseDelayMs === EXPERIMENT_PROVIDER_RETRY.baseDelayMs,
+  `Run provider retry pin did not reach the session: ${JSON.stringify(retrySettings)}`);
+  const discoveredToolNames = session.getActiveToolNames().sort();
+  const requiredTools = closedBook ? [] : [
+    ...EXPERIMENT_ALLOWED_TOOLS,
+    ...(armRuntime.activeContextEnabled ? EXPERIMENT_PIFOLD_EXTRA_TOOLS : []),
+    ...(registerPiCanon === null ? [] : EXPERIMENT_CANON_EXTRA_TOOLS),
+  ];
+  assertExperiment(requiredTools.every((name) => discoveredToolNames.includes(name)),
+    `Arm ${config.arm} is missing a required tool: ${discoveredToolNames.join(",")}`);
+  // The allowed set is the EXPOSED set. The first smoke proved that merely latching
+  // off-list calls red fails every arm: a repo-comprehension prompt with bash visible
+  // gets bash used. The extension's forbidden-tool latch stays as the backstop.
+  session.setActiveToolsByName([...requiredTools]);
+  const activeToolNames = session.getActiveToolNames().sort();
+  assertExperiment(JSON.stringify(activeToolNames) === JSON.stringify([...requiredTools].sort()),
+    `Arm ${config.arm} tool restriction did not hold: ${activeToolNames.join(",")}`);
+  assertExperiment(armRuntime.activeContextEnabled ||
+    !activeToolNames.includes(EXPERIMENT_PIFOLD_EXTRA_TOOLS[0]),
+  `Arm ${config.arm} exposed the active-context tool it must not have`);
+
+  // AN ARM RUN HAS NO WORKLOAD PROMPT to pin: its first user message is stage 1, delivered
+  // in the loop below and pinned by the plan's own payload hash. Only a closed-book session
+  // still opens with a prompt of its own, and the adjudicator checks exactly that one.
+  const prompt = closedBook ? closedBookPrompt(plan) : null;
+  // `arm` is NOT written here (2026-08-25): this file lands inside the namespace, and naming
+  // the arm in it is the asymmetry itself, since a model reading "pifold" knows it has a fold
+  // tool the comparison arm does not. The supervisor knows the arm from its own run config and
+  // checks against that instead of against a value the namespace could have written.
+  writeRunChannelDocument(READY_CHANNEL, `${JSON.stringify({
+    version: 1,
+    runId: config.runId,
+    workerPid,
+    workerStartTicks,
+    sessionId: manager.getSessionId(),
+    sessionFile: manager.getSessionFile(),
+    markerId,
+    activeToolNames,
+    configuredSystemPromptSha256: sha256Text(systemPrompt),
+    systemPromptSha256: sha256Text(session.systemPrompt),
+    appendedSystemPromptCount: loader.getAppendSystemPrompt().length,
+    promptSha256: prompt === null ? null : sha256Text(prompt),
+    checkoutSha256,
+    readyWallMs: Date.now(),
+    readyMonotonicMs: monotonicMs(),
+  }, null, 2)}\n`);
+
+  const deadline = setTimeout(() => {
+    deadlineFired = true;
+    try {
+      appendRunChannel(FAILURE_CHANNEL, {
+        version: 1, runId: config.runId, phase: "worker-deadline", detail: config.watchdogMs,
+        wallMs: Date.now(), monotonicMs: monotonicMs(),
+      });
+    } catch { /* The supervisor also records the deadline. */ }
+    void session.abort();
+  }, config.watchdogMs);
+  let terminalState = null;
+  try {
+    try {
+      if (closedBook) {
+        // A closed-book session is still ONE prompt: it has no stages to deliver, and its
+        // single turn IS the measurement.
+        await session.prompt(closedBookPrompt(plan), { expandPromptTemplates: false });
+        terminalState = await waitForDurableTerminalQuiescence(manager, session);
+      } else {
+        // ONE STAGE, ONE USER MESSAGE (2026-08-25). The run is a conversation across many
+        // turns rather than one enormous turn wrapping a tool loop, which is both closer to
+        // how a person actually works with an agent and the thing that lets Pi manage its
+        // own context: `_checkCompaction` runs from `_handlePostAgentRun` after each agent
+        // run settles AND inside `prompt()` before each user message is sent, so a 64-stage
+        // run evaluates the threshold 64 times instead of once.
+        //
+        // The worker asks the extension for each stage rather than the model asking for it
+        // with a key, so nothing about receiving work depends on what the model still holds
+        // in context. The stale-artifact collect and plant ride inside `deliverStage`, in
+        // the gap between turns where the model is not running at all.
+        for (let stage = 1; stage <= plan.stageCount; stage += 1) {
+          if (deadlineFired) break;
+          const served = await experiment.deliverStage();
+          assertExperiment(served.stage === stage,
+            `Stage delivery is out of order: asked for ${stage}, got ${served.stage}`);
+          await session.prompt(served.text, { expandPromptTemplates: false });
+          terminalState = await waitForDurableTerminalQuiescence(manager, session);
+          stagesDeliveredCount = stage;
+        }
+        // THE LAST NOTE IS STILL COLLECTED. Every earlier ask is consumed by the next
+        // stage's delivery; an ask on the final stage has no next delivery, so it would
+        // otherwise be left populated in the checkout, which is exactly the disk-memory
+        // channel the bounds exist to close.
+        experiment.collectPendingArtifact();
+        // THE WITHHELD END BLOCK: asked only after the whole workload was delivered, so no
+        // pre-phase surface ever carried the questions. Composed by the SUPERVISOR and
+        // carried as text, byte-identical across arms, with the manifest pinning the exact
+        // bytes. A run that did not finish its stages skips it and fails its own terminal
+        // assertions instead.
+        if (!deadlineFired && stagesDelivered() === plan.stageCount) {
+          await session.prompt(config.endBlockPrompt, { expandPromptTemplates: false });
+          terminalState = await waitForDurableTerminalQuiescence(manager, session);
+        }
+      }
+    } catch (error) {
+      const text = error instanceof Error ? `${error.message}` : String(error);
+      // The unmanaged arm is expected to end at the wall. That is its measurement, not a
+      // failure; every other arm must never reach it.
+      if (armRuntime.toleratesOverflow && isWindowOverflow(text)) {
+        overflow = { detected: "thrown-error", detail: text.slice(0, 2_048), monotonicMs: monotonicMs() };
+      } else {
+        throw error;
+      }
+    }
+  } finally {
+    clearTimeout(deadline);
+  }
+
+  const entries = manager.getBranch();
+  const terminal = terminalState?.terminal ?? lastConversationalMessage(entries);
+  const terminalMessage = terminalState?.terminalMessage ?? terminal?.message;
+  if (!overflow && armRuntime.toleratesOverflow &&
+      ["error", "length"].includes(terminalMessage?.stopReason)) {
+    overflow = {
+      detected: `stop-reason:${terminalMessage.stopReason}`,
+      // The overflow text arrives in errorMessage, not content (observed: content []
+      // with "Codex error: Your input exceeds the context window ..." alongside it).
+      detail: [terminalMessage.errorMessage ?? "", JSON.stringify(terminalMessage.content ?? null)]
+        .join("\n").slice(0, 2_048),
+      monotonicMs: monotonicMs(),
+    };
+  }
+  assertExperiment(!deadlineFired, "Experiment worker hit its watchdog deadline");
+  assertExperiment(closedBook || stagesDelivered() === plan.stageCount,
+    `Experiment worker ended with ${stagesDelivered()} of ${plan.stageCount} stages delivered ` +
+    `; last stop reason ${terminalMessage?.stopReason ?? "none"} with ` +
+    `${latchedFailures()} latched failure(s)`);
+  // A SUSPENDED RUNTIME IS A DEAD RUN, whatever it dies of afterwards.
+  //
+  // Checked BEFORE the terminal-stop assertion so the report names the cause instead of
+  // the symptom. sol-20260812 reps 3 and 4 both ended on an aborted request and both said
+  // so; what actually happened in each is that a commit twenty minutes earlier failed to
+  // persist, folding switched off for the rest of the session, and occupancy then climbed
+  // to the wall with nothing left that could reclaim it. The abort was the last event, not
+  // the first. Only meaningful where folding runs at all.
+  const foldFailures = armRuntime.activeContextEnabled
+    ? entries
+      .filter((entry) => typeof entry?.customType === "string" &&
+        entry.customType.endsWith(CONTEXT_EVENT_SUFFIX) && entry.data?.kind === "context.suspend")
+      .map((entry) => entry.data)
+    : [];
+  // Every announcement is fatal now: a transaction that fails suspends automatic folding on
+  // the first one, and from that point the session folds nothing at all.
+  const suspensions = foldFailures;
+  assertExperiment(suspensions.length === 0,
+    `Active-context folding was suspended during the run (${suspensions.length} announcement(s)); ` +
+    `first at ordinal ${suspensions[0]?.ordinal} revision ${suspensions[0]?.state_revision} ` +
+    `in phase ${suspensions[0]?.phase}: ${suspensions[0]?.error}`);
+  // AN APPLIED COMMIT OWES A RECEIPT, and the stream alone can say whether it paid.
+  //
+  // `noteAutomaticReceipt` is the last statement of the rung application, after the folds
+  // are emitted and before the state is persisted. So a commit that announces applied marks
+  // and never delivers a receipt is a commit that threw partway: the folds are in the stream
+  // and nowhere else, no fold record, no state entry, and the marks go back to pending.
+  //
+  // This is checked after the suspension, which carries the error verbatim and is the better
+  // message when both fire, and before the terminal stop, which is the symptom. It earns its
+  // place beside the announcement by being build-independent: measured across all six sealed
+  // sol-20260812 runs, every healthy commit is followed by its receipt within ten to
+  // twenty-three events and always before the next projection, and every lost one is followed
+  // by no receipt at all and a next projection reading exactly `applied_marks` revisions lower
+  // (99 to 85 at fourteen folds, 143 to 132 and 153 to 142 at eleven, 394 to 385 at nine).
+  // Reps 3, 4 and 6 are the known losses. Rep 1 is the reason this exists: it lost fourteen
+  // folds the same way on a build that predates every announcement, and nothing in the record
+  // said so until this check was run against it.
+  const contextEvents = armRuntime.activeContextEnabled
+    ? entries
+      .filter((entry) => typeof entry?.customType === "string" &&
+        entry.customType.endsWith(CONTEXT_EVENT_SUFFIX) && entry.data?.kind)
+      .map((entry) => entry.data)
+    : [];
+  const receipts = receiptLens(contextEvents);
+  const unpaid = receipts.missing[0];
+  assertExperiment(receipts.commitsWithoutReceipt === 0,
+    `${receipts.commitsWithoutReceipt} of ${receipts.appliedCommits} applied commit(s) never ` +
+    "delivered a receipt, so their folds left no record and their marks went back to pending; " +
+    `first at seq ${unpaid?.seq} revision ${unpaid?.revision} applying ${unpaid?.appliedMarks} ` +
+    `mark(s) on trigger ${unpaid?.trigger}, with the next projection reading revision ` +
+    `${unpaid?.nextProjectionRevision} (${unpaid?.revisionsRolledBack} revisions back)`);
+  assertExperiment(overflow || (terminalMessage?.role === "assistant" &&
+    terminalMessage.stopReason === "stop"),
+  "Experiment worker did not end at one terminal provider stop");
+
+  let foldSummary = null;
+  if (armRuntime.activeContextEnabled) {
+    const activeState = materializeActiveContextState(entries, manager.getSessionId(),
+      PI_FOLD_STATE_ENTRY, PI_FOLD_FOLD_RECORD_ENTRY);
+    foldSummary = {
+      foldCount: activeState.folds.length,
+      // Recorded on a passing run too, so a clean stream says the check ran rather than
+      // leaving it to be inferred from the absence of a failure. Zero of zero and zero of
+      // twelve are different facts about a session.
+      appliedCommits: receipts.appliedCommits,
+      commitsWithoutReceipt: receipts.commitsWithoutReceipt,
+      expanded: [...(activeState.expanded ?? [])],
+      protectedRefs: (activeState.protected ?? []).length,
+      // Decisions the run ended still owing: marks the agent placed that no fold
+      // event paid for. Attempted curation the committed-mass share cannot see.
+      pendingMarks: (activeState.pendingMarks ?? []).length,
+      pendingAgentMarks: (activeState.pendingMarks ?? [])
+        .filter((mark) => mark?.origin === "agent").length,
+      advisory: activeState.advisory ?? { highWater: 0, delivered: {} },
+      foldRecoveries: activeState.folds.map((fold) => ({
+        foldId: fold.id,
+        kind: fold.kind,
+        sha256: sha256Json(recoverFoldMessages({
+          foldId: fold.id, state: activeState, entries, sessionId: manager.getSessionId(),
+        })),
+      })),
+    };
+  }
+
+  const manifest = validateExperimentManifest(closedBook ? {
+    version: EXPERIMENT_PROTOCOL_VERSION,
+    runId: config.runId,
+    campaignId: config.campaignId,
+    sessionType: EXPERIMENT_CLOSED_BOOK_LABEL,
+    arm: config.arm,
+    mode: config.mode,
+    ...(config.transport === undefined ? {} : { transport: config.transport }),
+    ordinal: config.ordinal,
+    repetition: config.repetition,
+    seed: config.seed,
+    model: {
+      provider: model.provider,
+      id: model.id,
+      effort: config.model.effort,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      descriptorSha256: modelDescriptorSha256,
+    },
+    runtime: {
+      codeCommit: config.codeCommit,
+      codeTree: config.codeTree,
+      piVersion,
+      sourceHashes: config.sourceHashes,
+      dependencyHashes: config.dependencyHashes,
+      activeContextEnabled: false,
+      nativeCompactionEnabled: false,
+    },
+    target: {
+      repoKey: plan.repo.key,
+      url: plan.repo.url,
+      commit: plan.repo.commit,
+      treeSha256: config.targetTreeSha256,
+    },
+    plan: {
+      planSha256: plan.planSha256,
+      stageCount: plan.stageCount,
+      probeCount: plan.probeCount,
+      deliverableCount: plan.deliverableCount,
+    },
+    questionsSha256: sha256Json(closedBookQuestions(plan)),
+    createdWallMs: config.createdWallMs,
+  } : {
+    version: EXPERIMENT_PROTOCOL_VERSION,
+    runId: config.runId,
+    campaignId: config.campaignId,
+    arm: config.arm,
+    mode: config.mode,
+    // The deployment fact travels config -> manifest -> registration, so the sealed
+    // manifest states which serving budget the run's thresholds were measured against.
+    ...(config.providerInputBudget === undefined ? {} : { providerInputBudget: config.providerInputBudget }),
+    ...(config.transport === undefined ? {} : { transport: config.transport }),
+    ordinal: config.ordinal,
+    repetition: config.repetition,
+    seed: config.seed,
+    model: {
+      provider: model.provider,
+      id: model.id,
+      effort: config.model.effort,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
+      descriptorSha256: modelDescriptorSha256,
+    },
+    runtime: {
+      codeCommit: config.codeCommit,
+      codeTree: config.codeTree,
+      piVersion,
+      sourceHashes: config.sourceHashes,
+      dependencyHashes: config.dependencyHashes,
+      activeContextEnabled: armRuntime.activeContextEnabled,
+      nativeCompactionEnabled: armRuntime.nativeCompactionEnabled,
+    },
+    target: {
+      repoKey: plan.repo.key,
+      url: plan.repo.url,
+      commit: plan.repo.commit,
+      treeSha256: config.targetTreeSha256,
+      checkoutSha256,
+    },
+    plan: {
+      planSha256: plan.planSha256,
+      stageCount: plan.stageCount,
+      probeCount: plan.probeCount,
+      deliverableCount: plan.deliverableCount,
+    },
+    pacing: {
+      stageIntervalMs: config.stageIntervalMs,
+      watchdogMs: config.watchdogMs,
+      heartbeatMs: config.heartbeatMs,
+    },
+    // The withheld end block's exact bytes, pinned the way the closed-book leg
+    // pins its question list: the sealed session states what it was asked.
+    endBlockSha256: sha256Text(config.endBlockPrompt ?? ""),
+    createdWallMs: config.createdWallMs,
+  });
+  writeRunChannelDocument("run-manifest.json", `${JSON.stringify(manifest, null, 2)}\n`);
+
+  report = {
+    ok: true,
+    requiresIndependentAdjudication: true,
+    version: 1,
+    runId: config.runId,
+    arm: config.arm,
+    runnerMode: EXPERIMENT_RUNNER_MODE,
+    behavioralMode: EXPERIMENT_BEHAVIORAL_MODE,
+    workerPid,
+    workerStartTicks,
+    workerStartedWallMs,
+    workerStartedMonotonicMs,
+    workerFinishedWallMs: Date.now(),
+    workerFinishedMonotonicMs: monotonicMs(),
+    sessionId: manager.getSessionId(),
+    sessionFile: manager.getSessionFile(),
+    markerId,
+    piVersion,
+    manifestSha256: sha256Json(manifest),
+    settings,
+    checkoutSha256,
+    overflow,
+    foldSummary,
+    terminal: terminal ? {
+      entryId: terminal.id,
+      stopReason: terminalMessage?.stopReason ?? null,
+      messageSha256: terminalMessage ? sha256Json(terminalMessage) : null,
+    } : null,
+    deadlineFired,
+    stagesDelivered: closedBook ? null : stagesDelivered(),
+    // Always empty: there are no resumes to record. Kept so every sealed-run reader,
+    // which counts it against the one-user-message contract, still finds the field.
+    stageNudges: [],
+  };
+} catch (error) {
+  report = {
+    ok: false,
+    requiresIndependentAdjudication: true,
+    version: 1,
+    runId: config.runId,
+    arm: config.arm,
+    workerPid,
+    workerStartTicks,
+    workerStartedWallMs,
+    workerStartedMonotonicMs,
+    workerFinishedWallMs: Date.now(),
+    workerFinishedMonotonicMs: monotonicMs(),
+    sessionId: manager?.getSessionId?.() ?? null,
+    sessionFile: manager?.getSessionFile?.() ?? null,
+    overflow,
+    deadlineFired,
+    // Always empty: there are no resumes to record. Kept so every sealed-run reader,
+    // which counts it against the one-user-message contract, still finds the field.
+    stageNudges: [],
+    error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error),
+  };
+  process.exitCode = 1;
+} finally {
+  session?.dispose();
+  writeRunChannelDocument(REPORT_CHANNEL, `${JSON.stringify(report, null, 2)}\n`);
+}
+
+process.stdout.write(`${JSON.stringify({
+  ok: report.ok,
+  runId: config.runId,
+  arm: config.arm,
+  sessionFile: report.sessionFile,
+  overflow: report.overflow,
+})}\n`);

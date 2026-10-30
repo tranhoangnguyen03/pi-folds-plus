@@ -1,0 +1,11917 @@
+#!/usr/bin/env node
+
+// Offline verification of the fold-vs-compaction harness contract. No provider calls, no
+// live runs: this is the gate that must pass before the coordinator spends wall-clock on a
+// smoke, and again before the full campaign. Soak-verifier style: every gate proves a
+// specific failure is REJECTED, not merely that the happy path returns.
+//
+//   node scripts/verify_pi_context_experiment.mjs
+
+import assert from "node:assert/strict";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  EXPERIMENT_ARMS,
+  EXPERIMENT_DEFAULT_GUIDED_CURATION,
+  EXPERIMENT_PROVIDER_INPUT_BUDGETS,
+  EXPERIMENT_TRANSPORT,
+  EXPERIMENT_TRANSPORTS,
+  EXPERIMENT_DEFAULT_REPO,
+  EXPERIMENT_FOLD_SCHEDULING,
+  EXPERIMENT_GUIDANCE_PROFILES,
+  PI_DEFAULT_COMPACTION_RESERVE_TOKENS,
+  PROJECTION_FENCE_MARGIN_SHARE,
+  compactionReserveTokens,
+  compactionTriggerShare,
+  EXPERIMENT_MODES,
+  EXPERIMENT_MODE_PLANS,
+  EXPERIMENT_PROTOCOL_VERSION,
+  EXPERIMENT_PROVIDER_RETRY,
+  EXPERIMENT_REPOS,
+  EXPERIMENT_SCHEDULING_SOURCE,
+  MUTATION_ABSOLUTE_TOLERANCE_TOKENS,
+  PI_OUTPUT_BUDGET,
+  servedOutputBudget,
+  TOKEN_ESTIMATOR_ID,
+  CODE_WORD_PATTERN,
+  CONTEXT_EVENT_SUFFIX,
+  CONVERSATION_PROBE_KINDS,
+  FOLD_RECORD_SUFFIX,
+  REPO_PROBE_KINDS,
+  armRuntimeConfiguration,
+  assertBlindPacket,
+  buildLedger,
+  codeWordSentence,
+  codeWordReissueSentence,
+  effectiveCodeWord,
+  effectiveLedgerChecksum,
+  endBlockPrompt,
+  endBlockQuestions,
+  endBlockVerdicts,
+  EXPERIMENT_LEDGER_TOOL_NAME,
+  LEDGER_TOKEN_PATTERN,
+  LEDGER_UNKNOWN_VALUE,
+  ledgerSentencesForStage,
+  ledgerTaskSentence,
+  ledgerTokensOf,
+  plantedWordCollisions,
+  reissueAnnouncedAt,
+  stageCodeWordReissues,
+  computeRereadTax,
+  contextEventMetrics,
+  MEMEX_FOLD_LANE_ACCEPT_RATE,
+  corpusManifestSha256,
+  deliverableTranscripts,
+  endOfRunBriefProvenance,
+  estimateTokens,
+  extractDefinitions,
+  fileFacts,
+  isWindowOverflow,
+  nativeCompactionDisposition,
+  probeAnswerPattern,
+  probeTranscripts,
+  providerWeather,
+  receiptLens,
+  sessionLedgerLens,
+  seededShuffle,
+  stageCallDisposition,
+  stageCodeWords,
+  stagePayloadText,
+  stagePlanForRun,
+  stagePlanSha256,
+  submissionId,
+  thinkTimeFromPace,
+  toolResultContentSha256,
+  usageSeriesFromLedger,
+  outOfBandUsage,
+  testAwarenessLeaks,
+  protocolVocabularyLeaks,
+  EXPERIMENT_HISTORY_TOOL_NAME,
+  EXPERIMENT_ALLOWED_TOOLS,
+  PI_STOCK_TOOLS,
+  EXPERIMENT_TOOL_NAME,
+  EXPERIMENT_PIFOLD_EXTRA_TOOLS,
+  billedCostFromLedger,
+  unansweredRequestsFromLedger,
+  LONG_CONTEXT_TIER_PROMPT_TOKENS,
+  validateExperimentManifest,
+  validateExperimentRunConfig,
+  validateStagePlan,
+  AUDIT_HOP_CYCLE,
+  AUDIT_TRACE_IDS,
+  DERIVED_PROBE_KINDS,
+  HIDDEN_PROBE_KEYS,
+  HIDDEN_TRACE_LINK_KEYS,
+  auditStepId,
+  auditStepSentence,
+  auditStepSentences,
+  buildAuditTraces,
+  buildIncludeResolver,
+  echoVerdicts,
+  evaluateAuditHop,
+  normalizeTraceAnswer,
+  probeClassOf,
+  probeMechanicalVerdicts,
+  probeWaveRecovery,
+  readEscapesCheckout,
+  probeProvenance,
+  quotedIncludeSpecs,
+  traceStepTranscripts,
+  traceStepVerdicts,
+  visibleStage,
+  EXPERIMENT_CLOSED_BOOK_LABEL,
+  EXPERIMENT_SESSION_TYPES,
+  closedBookPrompt,
+  closedBookQuestions,
+  closedBookSystemPrompt,
+  closedBookTranscript,
+  campaignPlanPath,
+} from "./lib/pi_context_experiment.mjs";
+import {
+  PI_INSTALL_ROOT,
+  directoryTreeSha256,
+  sha256Json,
+  sha256Text,
+  verifySourceHashes,
+  writeJsonPublished,
+} from "./lib/pi_context_soak_attestation.mjs";
+import {
+  SUBSCRIPTION_CACHE_API,
+  SUBSCRIPTION_CACHE_DEFAULT_REPETITIONS,
+  SUBSCRIPTION_CACHE_ENDPOINT,
+  SUBSCRIPTION_CACHE_MINIMUM_TOKENS,
+  SUBSCRIPTION_CACHE_MODEL,
+  SUBSCRIPTION_CACHE_PROVIDER,
+  assertImplicitSubscriptionPayload,
+  assertSubscriptionDestination,
+  assertSubscriptionModel,
+  buildSubscriptionCacheTopologyPlan,
+  classifySubscriptionCacheRepetition,
+  subscriptionCacheTopologyManifest,
+  summarizeSubscriptionCacheTopology,
+} from "./probe_subscription_cache_topology.mjs";
+import {
+  SUBSCRIPTION_CACHE_PROJECTION_PROTOCOL_VERSION,
+  assertSerializedSubscriptionProjectionPayload,
+  buildSubscriptionCacheProjectionPlan,
+  classifySubscriptionCacheProjectionRepetition,
+  serializedItemPrefix,
+  serializedProjectionTopology,
+  subscriptionCacheProjectionManifest,
+  summarizeSubscriptionCacheProjection,
+} from "./probe_subscription_cache_projection.mjs";
+import {
+  EPHEMERAL_SUGGESTION_IRRELEVANT_LANE,
+  EPHEMERAL_SUGGESTION_PROTOCOL_VERSION,
+  EPHEMERAL_SUGGESTION_RELEVANT_LANE,
+  assertEphemeralSuggestionPayload,
+  buildEphemeralSuggestionPlan,
+  classifyEphemeralSuggestionRepetition,
+  correctPeekCall,
+  ephemeralSuggestionManifest,
+  normalizedExactAnswer,
+  summarizeEphemeralSuggestionTrials,
+} from "./probe_subscription_ephemeral_suggestion.mjs";
+import {
+  RETRIEVAL_SHADOW_BM25_B,
+  RETRIEVAL_SHADOW_BM25_K1,
+  RETRIEVAL_SHADOW_CONTENT_CHARS,
+  RETRIEVAL_SHADOW_PROTOCOL_VERSION,
+  RETRIEVAL_SHADOW_SCORER_ID,
+  scoreRetrievalShadowCandidates,
+  summarizeRetrievalShadowQueries,
+} from "./probe_retrieval_shadow.mjs";
+import {
+  COLD_SHADOW_KILL_RULE,
+  COLD_SHADOW_PROTOCOL_VERSION,
+  COLD_SHADOW_SCORER_ID,
+  coldCohorts,
+  coldComparison,
+  coldEligible,
+  coldSelect,
+  coldUnitsFromRecords,
+  pointBiserial,
+} from "./probe_cold_shadow.mjs";
+import {
+  RETRIEVAL_RANK_KILL_NEWEST_FIRST_MARGIN,
+  RETRIEVAL_RANK_KILL_RECALL_AT_5,
+  RETRIEVAL_RANK_MINIMUM_NEEDED_QUESTIONS,
+  RETRIEVAL_RANK_PROMOTE_RECALL_AT_1,
+  RETRIEVAL_RANK_PROMOTE_RECALL_AT_5,
+  RETRIEVAL_RANK_PROTOCOL_VERSION,
+  RETRIEVAL_RANK_SCORER_ID,
+  retrievalRankVerdict,
+  scoreRetrievalRankCandidates,
+  summarizeRetrievalRankQueries,
+} from "./probe_retrieval_rank.mjs";
+
+import {
+  DELIVERY_FD,
+  HARNESS_SOURCE,
+  RUN_CHANNEL_DOCUMENTS,
+  RUN_CHANNEL_FILES,
+  RUN_CHANNEL_FIRST_FD,
+  RUN_CHANNEL_LEDGERS,
+  SANDBOX_PATHS,
+  deleteHarnessSource,
+  hostSessionFile,
+  sandboxArgv,
+  sandboxConfig,
+  SANDBOX_PLAN_KEYS,
+  modelWritableTrees,
+  modelWrittenFiles,
+  runBindSources,
+  sandboxPlan,
+  runChannelFd,
+  seededTokenCarriers,
+  writeRunChannelDocument,
+  useRunChannelDirectory,
+  validateSandboxPlan,
+} from "./lib/pi_context_sandbox.mjs";
+
+const PROJECT = dirname(dirname(fileURLToPath(import.meta.url)));
+const source = (relative) => readFileSync(join(PROJECT, relative), "utf8");
+const checks = {};
+
+// ---------------------------------------------------------------------------
+// GATE 1 - arm contract
+// ---------------------------------------------------------------------------
+assert.deepEqual([...EXPERIMENT_ARMS], ["pifold", "native", "unmanaged", "nativefence"]);
+// The pifold arm runs compaction ON: the runtime's overflow recovery lane arms off
+// `session_before_compact`, so an arm with compaction off would be measuring a deployment
+// nobody is asked to run.
+assert.deepEqual(armRuntimeConfiguration("pifold"),
+  { activeContextEnabled: true, nativeCompactionEnabled: true, toleratesOverflow: false });
+assert.deepEqual(armRuntimeConfiguration("native"),
+  { activeContextEnabled: false, nativeCompactionEnabled: true, toleratesOverflow: false });
+assert.deepEqual(armRuntimeConfiguration("unmanaged"),
+  { activeContextEnabled: false, nativeCompactionEnabled: false, toleratesOverflow: true });
+// THE MATCHED-TRIGGER ARM. Compaction ON because the harness invokes it; fold runtime OFF
+// because a summary and a lossless fold are the two things this arm exists to tell apart.
+// It is deliberately identical to `native` in configuration: what differs is that the
+// harness fences it, and that difference lives in the extension rather than in a runtime
+// option, so nothing experiment-only reaches the shipped package.
+assert.deepEqual(armRuntimeConfiguration("nativefence"),
+  { activeContextEnabled: false, nativeCompactionEnabled: true, toleratesOverflow: false });
+assert.deepEqual(armRuntimeConfiguration("nativefence"), armRuntimeConfiguration("native"));
+// A COMPLETED COMPACTION IS THIS ARM'S DATUM, never its failure, and it stops the world
+// exactly as `native` does. Deriving rather than restating it is the point: an arm added
+// to the table gets its disposition from the same rule as every other.
+assert.deepEqual(nativeCompactionDisposition("nativefence"),
+  { latchOnPass: false, stopsTheWorld: true, latchOnCompletion: false });
+// THE MATCHED FENCE IS RETIRED (2026-08-25) and this gate's subject went with it. It
+// pinned the empirical share (0.937, the median of sol-20260813-paired rep 1's seven fence
+// commits) and proved every mode could actually REACH its own fence, after the first
+// matched-trigger smoke sealed green on both arms having never crossed once. The fence
+// existed only because a pull-delivered run was one turn and Pi's own threshold check was
+// therefore evaluated once; stages are user messages now, Pi evaluates it at every turn
+// boundary, and `native` is the comparator on Pi's own trigger. `nativefence` stays
+// READABLE, which is why its runtime disposition above is still pinned.
+assert.throws(() => armRuntimeConfiguration("hybrid"), /Unknown arm/);
+checks.armContractExclusive = true;
+
+// ---------------------------------------------------------------------------
+// GATE 2 - mode plans yield deliverables and NO probe waves, and the sealed probe
+// schedule they still validate old plans against stays internally consistent.
+// ---------------------------------------------------------------------------
+for (const mode of EXPERIMENT_MODES) {
+  const plan = EXPERIMENT_MODE_PLANS[mode];
+  const deliverableStages = [];
+  for (let ordinal = 1; ordinal <= plan.stageCount; ordinal += 1) {
+    if (ordinal % plan.deliverableEvery === 0) deliverableStages.push(ordinal);
+  }
+  assert(deliverableStages.length > 0, `${mode} mode plan yields no deliverable stage`);
+  assert(plan.payloadFloorChars > 0 && plan.payloadTargetChars >= plan.payloadFloorChars);
+  // No mode plan may name a probe stage any more: the field is gone, and its absence is
+  // what makes the builder incapable of emitting a wave. Asserted by NAME so a field
+  // reintroduced under the old name fails here rather than quietly resuming the waves.
+  assert(!Object.hasOwn(plan, "probeStages") && !Object.hasOwn(plan, "probeKinds"),
+    `${mode} mode plan still carries a live probe schedule`);
+  // The sealed schedule is READ-ONLY ground truth for validating plans built before the
+  // deletion, so its own laws still have to hold or a sealed plan would validate against
+  // an incoherent contract: one kind list per wave, exactly one repo-class control each,
+  // no echo in the first wave, the derivation control last, and the conversation slots
+  // satisfiable from carriers at or below ceil(wave/2) with no carrier used twice.
+  const sealed = plan.sealedProbeSchedule;
+  assert(sealed.stages.length > 0, `${mode} sealed probe schedule places no wave`);
+  assert.equal(sealed.kinds.length, sealed.stages.length,
+    `${mode} sealed probe kind schedule does not cover its waves`);
+  const usedCarriers = new Set();
+  for (const [waveIndex, ordinal] of sealed.stages.entries()) {
+    const kinds = sealed.kinds[waveIndex];
+    assert(kinds.every((kind) => kind === "repo" || kind === "echo" ||
+      CONVERSATION_PROBE_KINDS.includes(kind) || DERIVED_PROBE_KINDS.includes(kind)),
+    `${mode} sealed wave ${ordinal} declares an unknown probe kind`);
+    assert.equal(kinds.filter((kind) => kind === "repo").length, 1,
+      `${mode} sealed wave ${ordinal} must carry exactly one repo-class control`);
+    if (waveIndex === 0) assert(!kinds.includes("echo"),
+      `${mode} schedules an echo before any answer exists`);
+    if (kinds.includes("derivation-control")) {
+      assert.equal(waveIndex, sealed.stages.length - 1,
+        `${mode} schedules the derivation control before the last wave`);
+    }
+    const conversationSlots = kinds.filter((kind) => CONVERSATION_PROBE_KINDS.includes(kind)).length;
+    const eligible = [];
+    for (let stage = 1; stage <= Math.ceil(ordinal / 2); stage += 1) {
+      if (!sealed.stages.includes(stage) && !usedCarriers.has(stage)) eligible.push(stage);
+    }
+    assert(eligible.length >= conversationSlots,
+      `${mode} sealed wave ${ordinal} has ${eligible.length} unused carrier stages for ${conversationSlots} slots`);
+    eligible.slice(0, conversationSlots).forEach((stage) => usedCarriers.add(stage));
+  }
+  const flatKinds = sealed.kinds.flat();
+  assert(CONVERSATION_PROBE_KINDS.every((kind) => flatKinds.includes(kind)),
+    `${mode} sealed schedule never exercises every conversation probe kind`);
+  assert(flatKinds.includes("chain-link") && flatKinds.includes("echo"),
+    `${mode} sealed schedule never exercises the derived channel`);
+}
+// The sealed full-mode totals, unchanged: they are what a sealed plan is held to.
+{
+  const totals = {};
+  for (const kind of EXPERIMENT_MODE_PLANS.full.sealedProbeSchedule.kinds.flat()) {
+    totals[kind] = (totals[kind] ?? 0) + 1;
+  }
+  assert.deepEqual(totals, {
+    "chain-link": 9, echo: 3, "stage-fact": 4, "stage-binding": 3,
+    "derivation-control": 1, repo: 4,
+  });
+}
+// The deliverable cadence is now the count itself, with nothing suppressing it.
+assert.equal(EXPERIMENT_MODE_PLANS.full.stageCount / EXPERIMENT_MODE_PLANS.full.deliverableEvery, 4,
+  "full mode must still stage four deliverables after the probe suppression went away");
+checks.modePlansProduceProbesAndDeliverables = true;
+checks.probeKindSchedulesAreSatisfiable = true;
+
+// ---------------------------------------------------------------------------
+// GATE 3 IS RETIRED (2026-08-25). It pinned mechanical probe ground truth: repo-class
+// probes extracted from the pinned bytes, symbol uniqueness over the whole checkout, and
+// the conversation-probe carrier draw with its plan-wide no-reuse law. The probe waves are
+// deleted, so `buildProbes`, `buildConversationProbes`, `definitionSubject` and
+// `uniqueIdentifierIndex` are gone and there is nothing left to pin. Its number stays
+// spent. What survives here is the fixture the later gates are built on, plus the two
+// primitives that still run on every stage: `extractDefinitions`, which the checkout
+// collision scan reads, and `fileFacts`, whose wc -l line semantics every payload carries.
+// ---------------------------------------------------------------------------
+const fixture = mkdtempSync(join(tmpdir(), "pi-context-experiment-fixture-"));
+let plan;
+try {
+  const alpha = [
+    "// alpha fixture",
+    "pub struct AlphaConfig {",
+    "    pub width: usize,",
+    "}",
+    "",
+    "pub fn alpha_entry(config: AlphaConfig) -> usize {",
+    "    config.width",
+    "}",
+  ].join("\n");
+  const beta = [
+    "// beta fixture",
+    "pub trait BetaSink {",
+    "    fn accept(&self, value: usize);",
+    "}",
+    "",
+    "fn beta_only_helper(value: usize) -> usize {",
+    "    value + 1",
+    "}",
+  ].join("\n");
+  writeFileSync(join(fixture, "alpha.rs"), alpha);
+  writeFileSync(join(fixture, "beta.rs"), beta);
+  const definitions = extractDefinitions(alpha);
+  assert.deepEqual(definitions, [
+    { line: 2, identifier: "AlphaConfig", kind: "struct" },
+    { line: 6, identifier: "alpha_entry", kind: "fn" },
+  ]);
+  // wc -l line semantics: newline-terminated and unterminated files agree, and the
+  // retired split()-based count (which read one high on terminated files) stays dead.
+  writeFileSync(join(fixture, "wc-terminated.txt"), "a\nb\n");
+  writeFileSync(join(fixture, "wc-unterminated.txt"), "a\nb");
+  writeFileSync(join(fixture, "wc-empty.txt"), "");
+  assert.equal(fileFacts(fixture, join(fixture, "wc-terminated.txt")).lines, 2);
+  assert.equal(fileFacts(fixture, join(fixture, "wc-unterminated.txt")).lines, 2);
+  assert.equal(fileFacts(fixture, join(fixture, "wc-empty.txt")).lines, 0);
+  // The code word channel: seeded, unique, well-formed and woven the same way. The
+  // carrier-draw half of this block went with the probe waves; the words themselves are
+  // still planted in every payload stage and still read by `effectiveCodeWord`.
+  const words = stageCodeWords("code-word-seed", 64);
+  assert.equal(words.length, 64);
+  assert(words.every((word) => CODE_WORD_PATTERN.test(word)));
+  assert.equal(new Set(words).size, words.length);
+  assert.deepEqual(stageCodeWords("code-word-seed", 64), words);
+  assert.notDeepEqual(stageCodeWords("other-seed", 64), words);
+  assert.equal(codeWordSentence(7, words[6]),
+    `Audit note: the code word for stage 07 is ${words[6]}.`);
+
+  // -------------------------------------------------------------------------
+  // GATE 4 - stage plan hashing + ground-truth containment
+  // -------------------------------------------------------------------------
+  const modePlan = EXPERIMENT_MODE_PLANS.smoke;
+  const bulk = `x${"y".repeat(modePlan.payloadFloorChars + 1_000)}`;
+  writeFileSync(join(fixture, "bulk-a.rs"), bulk);
+  writeFileSync(join(fixture, "bulk-b.rs"), `${bulk}z`);
+  const bulkFacts = ["bulk-a.rs", "bulk-b.rs"].map((name) => fileFacts(fixture, join(fixture, name)));
+  const fixtureWord = (ordinal) => `cw-${String(ordinal).padStart(6, "0")}`;
+  // The seeded ledger every v4 plan carries. The fixture derives its own from a
+  // fixture seed exactly as the stager derives the real one from the frozen
+  // seed, so the validator's re-derivation law is exercised, not bypassed.
+  const fixtureLedger = buildLedger({ mode: "smoke", contentSeed: "aabbccdd00112233" });
+  const stageOf = (ordinal, kind, files, stageProbes, deliverable, chainStep = null,
+    codeWordReissue = null) => {
+    const codeWord = kind === "probe" ? null : fixtureWord(ordinal);
+    // Weave order mirrors the stager: base, then the audit step, then the
+    // ledger block, code word LAST, then any withdrawal of an earlier stage's word.
+    let instructions = `stage ${ordinal} instructions`;
+    if (chainStep !== null) instructions = `${instructions} ${auditStepSentence(chainStep)}`;
+    for (const sentence of ledgerSentencesForStage(fixtureLedger, ordinal)) {
+      instructions = `${instructions} ${sentence}`;
+    }
+    if (codeWord !== null) instructions = `${instructions} ${codeWordSentence(ordinal, codeWord)}`;
+    if (codeWordReissue !== null) {
+      instructions = `${instructions} ` +
+        `${codeWordReissueSentence(codeWordReissue.stage, codeWordReissue.codeWord)}`;
+    }
+    const stage = {
+      ordinal,
+      kind,
+      instructions,
+      codeWord,
+      codeWordReissue,
+      chainStep,
+      files: files.map((fact) => ({
+        path: fact.path, sha256: fact.sha256, lines: fact.lines, chars: fact.chars, bytes: fact.bytes,
+      })),
+      probes: stageProbes,
+      deliverable,
+      payloadChars: 0,
+      payloadSha256: "0".repeat(64),
+    };
+    const payload = stagePayloadText({
+      ...visibleStage(stage),
+      files: files.map((fact) => ({ ...fact })),
+    });
+    stage.payloadChars = payload.length;
+    stage.payloadSha256 = sha256Text(payload);
+    return stage;
+  };
+  // The smoke chain: SOF anchors on stage 1's first file, FIN takes its second,
+  // INC lands on a later delivery. Steps sit at stages 2, 3 and 5.
+  const fixtureChain = {
+    id: "trace-a",
+    links: [
+      { index: 1, stage: 2, hop: "SOF", hopIndex: null, input: "stage-1.rs", expectedAnswer: 1 },
+      { index: 2, stage: 3, hop: "FIN", hopIndex: 2, input: 1, expectedAnswer: "stage-1-extra.rs" },
+      { index: 3, stage: 5, hop: "INC", hopIndex: 1, input: "stage-1-extra.rs", expectedAnswer: "stage-2.rs" },
+    ],
+  };
+  const fixtureStepOf = (link) => ({
+    id: auditStepId(fixtureChain.id, link.index),
+    chainId: fixtureChain.id,
+    index: link.index,
+    hop: link.hop,
+    hopIndex: link.hopIndex,
+    anchor: link.index === 1 ? link.input : null,
+  });
+  const fixtureStepByStage = new Map(fixtureChain.links.map((link) => [link.stage, fixtureStepOf(link)]));
+  // Smoke waves follow the mode plan schedule: [chain-link, stage-fact, repo] at
+  // 4, [chain-link, echo, stage-binding, repo] at 8. Probes are hand-built
+  // against known carriers and links so every cross-check is explicit.
+  const waveProbes = {
+    4: [
+      {
+        id: "probe-04-01",
+        kind: "chain-link",
+        question: "The dependency appendix lists each audit trace in order and its " +
+          "trace-a step 01 row is blank. What value did you record for trace-a-01? " +
+          "Answer with the stage number only.",
+        expectedAnswer: "1",
+        chainId: "trace-a",
+        linkIndex: 1,
+        sourceStage: 2,
+      },
+      {
+        id: "probe-04-02",
+        kind: "stage-fact",
+        question: "What was the audit code word given in stage 01's instructions? " +
+          "Answer with the code word only.",
+        expectedAnswer: fixtureWord(1),
+        sourceStage: 1,
+      },
+      {
+        // The repo-class control, written out rather than drawn from the deleted
+        // `buildProbes`: this fixture carries the SEALED probe shape, which the
+        // validator still holds sealed plans to.
+        id: "probe-04-03",
+        kind: "definition-line",
+        // Named against the fixture's OWN files, never a stage-N.rs path: the anti-leak
+        // law refuses any stage text that pairs a chain link's stage with its path, and
+        // this wave already names stage 01 in its stage-fact question.
+        question: "In the file alpha.rs, which identifier is defined on line 6? " +
+          "Answer with the identifier only.",
+        expectedAnswer: "alpha_entry",
+        sourcePath: "alpha.rs",
+        sourceLine: 6,
+      },
+    ],
+    8: [
+      {
+        id: "probe-08-01",
+        kind: "chain-link",
+        question: "The dependency appendix lists each audit trace in order and its " +
+          "trace-a step 02 row is blank. What value did you record for trace-a-02? " +
+          "Answer with the repository-relative path only.",
+        expectedAnswer: "stage-1-extra.rs",
+        chainId: "trace-a",
+        linkIndex: 2,
+        sourceStage: 3,
+      },
+      {
+        id: "probe-08-02",
+        kind: "echo",
+        question: "Audit trail: restate the answer you gave for probe-04-01, exactly " +
+          "as you gave it. Answer with that value only.",
+        targetProbeId: "probe-04-01",
+      },
+      {
+        id: "probe-08-03",
+        kind: "stage-binding",
+        question: "Which repository-relative file was the FIRST file delivered in stage 03? " +
+          "Answer with the path only.",
+        expectedAnswer: "stage-3.rs",
+        sourceStage: 3,
+      },
+      {
+        id: "probe-08-04",
+        kind: "symbol-file",
+        question: "Which repository-relative file defines the function beta_only_helper? " +
+          "Answer with the path only.",
+        expectedAnswer: "beta.rs",
+        sourcePath: "beta.rs",
+        sourceLine: 6,
+      },
+    ],
+  };
+  const repo = EXPERIMENT_REPOS[EXPERIMENT_DEFAULT_REPO];
+  plan = {
+    version: EXPERIMENT_PROTOCOL_VERSION,
+    mode: "smoke",
+    repo: {
+      key: repo.key, url: repo.url, commit: repo.commit, license: repo.license,
+      language: repo.language, treeSha256: corpusManifestSha256(bulkFacts),
+    },
+    seed: "0011223344556677",
+    stageCount: modePlan.stageCount,
+    stageIntervalMs: modePlan.stageIntervalMs,
+    watchdogMs: modePlan.watchdogMs,
+    heartbeatMs: modePlan.heartbeatMs,
+    corpus: { files: 2, eligibleFiles: 2, lines: 2, chars: bulk.length * 2 },
+    stages: Array.from({ length: modePlan.stageCount }, (_, index) => {
+      const ordinal = index + 1;
+      if (modePlan.sealedProbeSchedule.stages.includes(ordinal)) {
+        return stageOf(ordinal, "probe", [], waveProbes[ordinal], null);
+      }
+      const files = [{ ...bulkFacts[ordinal % 2], path: `stage-${ordinal}.rs` }];
+      // Stage 1 delivers a second file so the chain's FIN hop has a target that
+      // is not its own anchor.
+      if (ordinal === 1) files.push({ ...bulkFacts[0], path: "stage-1-extra.rs" });
+      const deliverable = ordinal % modePlan.deliverableEvery === 0
+        ? { id: `deliverable-${ordinal}`, instructions: "write it", referencesStages: [1] }
+        : null;
+      return stageOf(ordinal, ordinal % modePlan.revisitEvery === 0 ? "revisit" : "read", files, [], deliverable,
+        fixtureStepByStage.get(ordinal) ?? null);
+    }),
+    chains: [fixtureChain],
+    ledger: fixtureLedger,
+    probeCount: 0,
+    deliverableCount: 0,
+    planSha256: "0".repeat(64),
+  };
+  plan.probeCount = plan.stages.reduce((total, stage) => total + stage.probes.length, 0);
+  plan.deliverableCount = plan.stages.filter((stage) => stage.deliverable).length;
+  plan.planSha256 = stagePlanSha256(plan);
+  validateStagePlan(plan);
+  // The hash covers the body: any edit invalidates it, and re-hashing is idempotent.
+  assert.equal(stagePlanSha256({ ...plan, planSha256: "f".repeat(64) }), plan.planSha256);
+  const tampered = structuredClone(plan);
+  tampered.stages[0].instructions += " (edited)";
+  assert.throws(() => validateStagePlan(tampered), /hash does not cover/);
+  const unpinned = structuredClone(plan);
+  unpinned.repo.commit = "a".repeat(40);
+  unpinned.planSha256 = stagePlanSha256(unpinned);
+  assert.throws(() => validateStagePlan(unpinned), /repo pin is invalid/);
+  const duplicated = structuredClone(plan);
+  duplicated.stages[2].payloadSha256 = duplicated.stages[1].payloadSha256;
+  duplicated.planSha256 = stagePlanSha256(duplicated);
+  assert.throws(() => validateStagePlan(duplicated), /repeats a payload/);
+  checks.stagePlanHashingCoversBodyAndRejectsTamper = true;
+  checks.harnessPayloadsUniqueSoRereadTaxIsModelOnly = true;
+
+  // The conversation-probe laws each refuse: a code word on a probe stage, a second
+  // probe against one carrier, ground truth disagreeing with its carrier, and a
+  // probe id repeated across waves (grading joins by id).
+  const wordedProbe = structuredClone(plan);
+  wordedProbe.stages[3].codeWord = "cw-00dead";
+  wordedProbe.planSha256 = stagePlanSha256(wordedProbe);
+  assert.throws(() => validateStagePlan(wordedProbe), /carries a code word/);
+  const rewovenWord = structuredClone(plan);
+  rewovenWord.stages[1].codeWord = rewovenWord.stages[0].codeWord;
+  rewovenWord.planSha256 = stagePlanSha256(rewovenWord);
+  assert.throws(() => validateStagePlan(rewovenWord), /missing, malformed, unwoven, or repeated/);
+  const reusedCarrier = structuredClone(plan);
+  reusedCarrier.stages[7].probes[2].sourceStage = 1;
+  reusedCarrier.stages[7].probes[2].expectedAnswer = "stage-1.rs";
+  reusedCarrier.planSha256 = stagePlanSha256(reusedCarrier);
+  assert.throws(() => validateStagePlan(reusedCarrier), /probed twice/);
+  const liedFact = structuredClone(plan);
+  liedFact.stages[3].probes[1].expectedAnswer = "cw-00beef";
+  liedFact.planSha256 = stagePlanSha256(liedFact);
+  assert.throws(() => validateStagePlan(liedFact), /disagrees with carrier/);
+  const reusedId = structuredClone(plan);
+  reusedId.stages[7].probes[1].id = "probe-04-02";
+  reusedId.planSha256 = stagePlanSha256(reusedId);
+  assert.throws(() => validateStagePlan(reusedId), /repeats a probe id/);
+  checks.conversationProbeLawsRejectTamper = true;
+
+  const runPlan = stagePlanForRun(plan);
+  const runSerialized = JSON.stringify(runPlan);
+  // Repo-class only, as before: a stage-fact answer appears in its carrier's own
+  // instructions BY DESIGN (asserted below), and a chain-link answer is a stage number or
+  // a delivered path the plan necessarily names.
+  const repoClassProbes = plan.stages.flatMap((stage) =>
+    stage.probes.filter((probe) => REPO_PROBE_KINDS.includes(probe.kind)));
+  assert.equal(repoClassProbes.length, 2, "the fixture must seat both repo-class controls");
+  for (const probe of repoClassProbes) {
+    assert(!runSerialized.includes(probe.expectedAnswer) || probe.kind === "symbol-file",
+      "run-visible plan leaked a probe answer");
+  }
+  assert(runPlan.stages.every((stage) => stage.probes.every((probe) =>
+    !Object.hasOwn(probe, "expectedAnswer") && !Object.hasOwn(probe, "sourceLine") &&
+    !Object.hasOwn(probe, "sourceStage"))),
+  "run-visible plan retained probe ground truth");
+  assert(runPlan.chains.every((chain) => chain.links.every((link) =>
+    HIDDEN_TRACE_LINK_KEYS.every((key) => !Object.hasOwn(link, key)))),
+  "run-visible plan retained chain ground truth");
+  // The stage-fact channel leaks its answer by DESIGN, in exactly one place: the
+  // carrier's own instructions. Anywhere else and the probe stops measuring recall.
+  for (const probe of plan.stages.flatMap((stage) => stage.probes)) {
+    if (probe.kind !== "stage-fact") continue;
+    const appearances = runPlan.stages.filter((stage) =>
+      stage.instructions.includes(probe.expectedAnswer));
+    assert.equal(appearances.length, 1, "stage-fact code word must appear exactly once");
+    assert.equal(appearances[0].ordinal, probe.sourceStage,
+      "stage-fact code word must appear in its carrier stage only");
+  }
+  assert.throws(() => stagePayloadText(plan.stages.find((stage) => stage.probes.length > 0)),
+    /still carries probe ground truth/);
+  checks.probeAnswersNeverReachTheSession = true;
+} finally {
+  rmSync(fixture, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// GATE 5 - manifest pinning
+// ---------------------------------------------------------------------------
+const repo = EXPERIMENT_REPOS[EXPERIMENT_DEFAULT_REPO];
+const manifest = {
+  version: EXPERIMENT_PROTOCOL_VERSION,
+  runId: "2026-08-05T00-00-00Z-pifold-rep1-abcd1234",
+  campaignId: "campaign-1",
+  arm: "pifold",
+  mode: "smoke",
+  guidance: "pressure",
+  ordinal: 1,
+  repetition: 1,
+  seed: "0011223344556677",
+  model: {
+    provider: "openai-codex", id: "gpt-5.6-sol", effort: "xhigh",
+    contextWindow: 272_000, maxTokens: 4_096, descriptorSha256: "a".repeat(64),
+  },
+  runtime: {
+    codeCommit: "b".repeat(40),
+    codeTree: "c".repeat(40),
+    piVersion: "0.83.0",
+    sourceHashes: { "scripts/lib/pi_context_experiment.mjs": "d".repeat(64) },
+    dependencyHashes: { piPackageJson: "e".repeat(64) },
+    activeContextEnabled: true,
+    nativeCompactionEnabled: true,
+  },
+  target: {
+    repoKey: repo.key, url: repo.url, commit: repo.commit,
+    treeSha256: "1".repeat(64), checkoutSha256: "1".repeat(64),
+  },
+  plan: {
+    planSha256: "2".repeat(64),
+    stageCount: EXPERIMENT_MODE_PLANS.smoke.stageCount,
+    probeCount: 6,
+    deliverableCount: 2,
+  },
+  pacing: {
+    stageIntervalMs: EXPERIMENT_MODE_PLANS.smoke.stageIntervalMs,
+    watchdogMs: EXPERIMENT_MODE_PLANS.smoke.watchdogMs,
+    heartbeatMs: EXPERIMENT_MODE_PLANS.smoke.heartbeatMs,
+  },
+  endBlockSha256: "4".repeat(64),
+  createdWallMs: 1_800_000_000_000,
+};
+validateExperimentManifest(manifest);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, runtime: { ...manifest.runtime, nativeCompactionEnabled: false },
+}), /contradicts arm pifold/);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, arm: "native",
+}), /contradicts arm native/);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, model: { ...manifest.model, effort: "" },
+}), /provider, model id and effort/);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, target: { ...manifest.target, commit: "9".repeat(40) },
+}), /target-repo pin/);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, guidance: "aggressive",
+}), /guidance profile/);
+assert.throws(() => validateExperimentManifest({
+  ...manifest, pacing: { ...manifest.pacing, watchdogMs: 1 },
+}), /pacing drifted/);
+for (const arm of EXPERIMENT_ARMS) {
+  const runtime = armRuntimeConfiguration(arm);
+  validateExperimentManifest({
+    ...manifest,
+    arm,
+    runtime: {
+      ...manifest.runtime,
+      activeContextEnabled: runtime.activeContextEnabled,
+      nativeCompactionEnabled: runtime.nativeCompactionEnabled,
+    },
+  });
+}
+checks.manifestPinsArmModelRuntimeTargetAndPlan = true;
+
+const runConfig = {
+  version: EXPERIMENT_PROTOCOL_VERSION,
+  runId: "run-1",
+  runDir: "/nonexistent/pi-fold-runs/state/ops/pi-context-experiment/c1/runs/run-1",
+  campaignId: "c1",
+  arm: "native",
+  mode: "smoke",
+  guidance: "curation",
+  repetition: 2,
+  ordinal: 2,
+  seed: "0011223344556677",
+  unit: "pi-fold-experiment-run-1.service",
+  invocationId: "1".repeat(32),
+  supervisorPid: 42,
+  supervisorStartTicks: 99,
+  bootId: "11111111-1111-1111-1111-111111111111",
+  codeCommit: "b".repeat(40),
+  codeTree: "c".repeat(40),
+  firstChallenge: "4".repeat(64),
+  stageCount: EXPERIMENT_MODE_PLANS.smoke.stageCount,
+  stageIntervalMs: EXPERIMENT_MODE_PLANS.smoke.stageIntervalMs,
+  watchdogMs: EXPERIMENT_MODE_PLANS.smoke.watchdogMs,
+  heartbeatMs: EXPERIMENT_MODE_PLANS.smoke.heartbeatMs,
+  createdWallMs: 1_800_000_000_000,
+  createdMonotonicMs: 1_000,
+  sourceHashes: Object.fromEntries(Array.from({ length: 6 }, (_, index) =>
+    [`scripts/file-${index}.mjs`, String(index + 1).repeat(64).slice(0, 64)])),
+  dependencyHashes: {
+    piPackageJson: "a".repeat(64), piDistTree: "b".repeat(64), piNodeModulesTree: "c".repeat(64),
+    nodeExecutable: "f".repeat(64),
+  },
+  planPath: "/nonexistent/pi-fold-runs/state/ops/pi-context-experiment/c1/stages-smoke.json",
+  planSha256: "2".repeat(64),
+  repoDir: "/nonexistent/pi-fold-runs/state/ops/pi-context-experiment/c1/runs/run-1/repo",
+  targetCommit: repo.commit,
+  targetTreeSha256: "3".repeat(64),
+  model: { provider: "openai-codex", id: "gpt-5.6-sol", effort: "xhigh" },
+  ledgerTasks: [{ id: "lt-01", stage: 3 }],
+  querySeed: "04ce51d9cd78889e",
+};
+validateExperimentRunConfig(runConfig);
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, repoDir: "/tmp/elsewhere/repo" }),
+  /checkout must live inside the run directory/);
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, model: { provider: "p", id: "m" } }),
+  /run config shape|provider, model id and effort/);
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, watchdogMs: 5 }), /pacing drifted/);
+// THE DETERMINISTIC CONDITION (Shane 2026-08-24): postFoldNotice false silences the
+// pifold arm's brief invitation, so the sealed run states its own condition. Boolean
+// only, and it belongs to the arm that registers the runtime: on any other arm the
+// switch is a fact about nothing, the briefGenerator rule one option over.
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", postFoldNotice: false });
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", postFoldNotice: true });
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", postFoldNotice: "off" }),
+  /post-fold-notice condition is invalid/);
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, postFoldNotice: false }),
+  /post-fold-notice condition belongs to the pifold arm alone/);
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", postFoldNotice: false }),
+  /post-fold-notice condition belongs to the pifold arm alone/);
+checks.runConfigPinsCheckoutAndModelTriple = true;
+checks.postFoldNoticeConditionPinned = true;
+
+// THE BAND CONDITION (Shane 2026-08-24): an explicit thresholds object for the pifold
+// arm, set whole or not at all, born from the commit-rewrite finding (42-46 percent of
+// pifold's uncached input is the post-commit prefix rewrite, sized by minTarget). The
+// object travels the run config to registerActiveContext, whose own resolveThresholds
+// revalidates it; here the config layer pins the arm rule and the whole-object shape.
+const bandFixture = { maxTarget: 0.8, minTarget: 0.2, consolidateAfter: 10, minFoldChars: 8000 };
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", thresholds: bandFixture });
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, thresholds: bandFixture }),
+  /belongs to the pifold arm alone/, "a native arm accepted a thresholds condition");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", thresholds: bandFixture }),
+  /belongs to the pifold arm alone/, "the fence arm accepted a thresholds condition");
+assert.throws(() => validateExperimentRunConfig({
+  ...runConfig, arm: "pifold", thresholds: { maxTarget: 0.8, minTarget: 0.2 },
+}), /whole or not at all/, "a partial thresholds object was accepted");
+assert.throws(() => validateExperimentRunConfig({
+  ...runConfig, arm: "pifold", thresholds: { ...bandFixture, minTarget: 0.9 },
+}), /0 < minTarget < maxTarget < 1/, "an inverted band was accepted");
+assert.throws(() => validateExperimentRunConfig({
+  ...runConfig, arm: "pifold", thresholds: { ...bandFixture, extra: 1 },
+}), /whole or not at all/, "an unknown thresholds field was accepted");
+checks.thresholdsBandConditionPinned = true;
+
+// THE TOOL-CALL DIET CONDITION (Shane 2026-08-24): toolFoldThreshold on the pifold arm
+// alone, a share strictly inside (0, 1), refused by name everywhere else. The runtime
+// revalidates the same invariant at registration (package gate 148); this layer pins
+// what a sealed config may claim to have run under.
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", toolFoldThreshold: 0.5 });
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, toolFoldThreshold: 0.5 }),
+  /belongs to the pifold arm alone/, "a native arm accepted a tool-fold-threshold condition");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", toolFoldThreshold: 0.5 }),
+  /belongs to the pifold arm alone/, "the fence arm accepted a tool-fold-threshold condition");
+for (const outside of [0, 1, -0.25, 1.5, "0.5", Number.NaN]) {
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", toolFoldThreshold: outside }),
+    /share strictly between 0 and 1/, `toolFoldThreshold ${String(outside)} was accepted`);
+}
+checks.toolFoldThresholdConditionPinned = true;
+
+// THE WORKING-MEMORY CONDITION, RETIRED 2026-08-28. The channel is deleted from the
+// package (registerPiFold refuses the name) and no new run can carry it. What this gate
+// pins now is the RETIREMENT being honest in both directions: a sealed config still
+// validates, because sol-20260826-full2 reps 4 and 6 state the condition in their own
+// configs and must keep adjudicating, while the extension no longer forwards the seam to
+// a registration that would throw on it. Package gate 149 is retired and its number spent.
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", workingMemory: true });
+validateExperimentRunConfig({ ...runConfig, arm: "pifold", workingMemory: false });
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, workingMemory: true }),
+  /belongs to the pifold arm alone/, "a native arm accepted a working-memory condition");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", workingMemory: true }),
+  /belongs to the pifold arm alone/, "the fence arm accepted a working-memory condition");
+for (const outside of [1, "true", null]) {
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", workingMemory: outside }),
+    /must be a boolean/, `workingMemory ${String(outside)} was accepted`);
+}
+{
+  // The forwarding is GONE: leaving it would hand a refused option to registerPiFold and
+  // kill the arm at construction on any replay of a sealed working-memory run.
+  const extensionSource = source("scripts/pi_context_experiment_extension.mjs");
+  assert(!extensionSource.includes("workingMemory"),
+    "the extension still forwards the deleted working-memory seam to registration");
+  const runnerSource = source("scripts/run_pi_context_experiment.mjs");
+  assert(!runnerSource.includes("--working-memory"),
+    "the runner still offers a flag for the deleted working-memory condition");
+}
+checks.workingMemoryConditionPinned = true;
+
+// THE CANON CONDITION (Shane 2026-08-26): a run may carry the pi-canon extension beside
+// its arm's own mechanism, against a blank store under the sandbox home, and the seam is
+// pinned at every layer it crosses. The config law: a boolean, arm sessions only,
+// arm-independent (the A/B pairs it with pifold; the 2x2 that pairs it with native needs
+// no new contract), and the condition travels WITH the staged copy's tree hash, both ways,
+// because a run that carried the extension without pinning its bytes is a condition the
+// seal cannot reproduce. The staged-tree hash is a function of exactly the listed files,
+// order and bytes, so a canon checkout that drifts cannot reuse a sealed pin. The worker
+// seam and the tool grant are pinned in source, the same idiom as the working memory's,
+// because a config field nothing forwards reads as a condition that ran.
+{
+  const treePin = "a".repeat(64);
+  validateExperimentRunConfig({ ...runConfig, arm: "pifold", canonMemory: true, canonTreeSha256: treePin });
+  validateExperimentRunConfig({ ...runConfig, canonMemory: true, canonTreeSha256: treePin });
+  validateExperimentRunConfig({ ...runConfig, arm: "pifold", canonMemory: false });
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", canonMemory: "yes" }),
+    /must be a boolean/, "a non-boolean canon condition was accepted");
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", canonTreeSha256: treePin }),
+    /requires the canon condition/, "a canon tree pin was accepted without the condition");
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", canonMemory: true }),
+    /requires the staged tree pin/, "the canon condition was accepted without its tree pin");
+  assert.throws(() => validateExperimentRunConfig({
+    ...runConfig, arm: "pifold", canonMemory: true, canonTreeSha256: "not-hex",
+  }), /requires the canon condition and a sha256/, "a malformed canon tree pin was accepted");
+  const closedCanon = (({ guidance: _g, ledgerTasks: _l, querySeed: _q, ...rest }) => rest)({
+    ...runConfig, sessionType: EXPERIMENT_CLOSED_BOOK_LABEL, arm: EXPERIMENT_CLOSED_BOOK_LABEL,
+    canonMemory: true, canonTreeSha256: treePin,
+  });
+  assert.throws(() => validateExperimentRunConfig(closedCanon),
+    /belongs to the arm sessions/, "a closed-book session accepted the canon condition");
+
+  const { CANON_HARNESS_FILES, canonHarnessTreeSha256 } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_sandbox.mjs")));
+  assert(CANON_HARNESS_FILES.includes("canon.ts") && CANON_HARNESS_FILES.includes("lib/store.ts"),
+    "the staged canon list lost its entry point or its store");
+  const canonFixture = mkdtempSync(join(tmpdir(), "pi-fold-canon-gate-"));
+  for (const relative of CANON_HARNESS_FILES) {
+    mkdirSync(join(canonFixture, dirname(relative)), { recursive: true });
+    writeFileSync(join(canonFixture, relative), `// ${relative}` + "\n");
+  }
+  const first = canonHarnessTreeSha256(canonFixture);
+  assert.match(first, /^[0-9a-f]{64}$/, "the staged tree hash is not a sha256");
+  assert.equal(canonHarnessTreeSha256(canonFixture), first, "the staged tree hash is not deterministic");
+  writeFileSync(join(canonFixture, "lib/store.ts"), "// drifted" + "\n");
+  assert.notEqual(canonHarnessTreeSha256(canonFixture), first,
+    "a drifted canon byte reuses the sealed pin");
+  rmSync(join(canonFixture, "canon.ts"));
+  assert.throws(() => canonHarnessTreeSha256(canonFixture),
+    /ENOENT/, "a missing staged file hashes instead of refusing");
+  rmSync(canonFixture, { recursive: true, force: true });
+
+  const workerSource = source("scripts/run_pi_context_experiment_worker.mjs");
+  assert(workerSource.includes('jiti.import(join(PROJECT, "canon", "canon.ts"))'),
+    "the worker does not import the canon extension from the harness copy");
+  assert(workerSource.includes('registerPiCanon(pi, { root: join(SANDBOX_PATHS.home, ".canon") })'),
+    "the worker does not register the canon store under the sandbox home");
+  assert(workerSource.includes("...(registerPiCanon === null ? [] : EXPERIMENT_CANON_EXTRA_TOOLS)"),
+    "the canon tool is not on the exposed surface under the condition");
+  const launcherSource = source("scripts/run_pi_context_experiment.mjs");
+  assert(launcherSource.includes(
+    "canonHarnessTreeSha256(join(harnessDir, \"canon\")) === canonTreeSha256"),
+  "the supervisor does not re-hash the staged copy against the pinned tree");
+  const extensionSource = source("scripts/pi_context_experiment_extension.mjs");
+  assert(extensionSource.includes("config.canonMemory === true ? EXPERIMENT_CANON_EXTRA_TOOLS : []"),
+    "the extension does not admit the canon tool under the condition");
+}
+checks.canonConditionPinned = true;
+
+// THE FENCE POINT (Shane 2026-08-24): --fence-share moves the nativefence compact point
+// off its matched default; the config layer pins the arm rule and the proportion law.
+validateExperimentRunConfig({ ...runConfig, arm: "nativefence", fenceShare: 0.5 });
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "pifold", fenceShare: 0.5 }),
+  /belongs to the nativefence arm alone/, "the pifold arm accepted a fence share");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, fenceShare: 0.5 }),
+  /belongs to the nativefence arm alone/, "the native arm accepted a fence share");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", fenceShare: 1.2 }),
+  /strictly between 0 and 1/, "an out-of-range fence share was accepted");
+assert.throws(() => validateExperimentRunConfig({ ...runConfig, arm: "nativefence", fenceShare: "0.5" }),
+  /strictly between 0 and 1/, "a string fence share was accepted");
+checks.fenceShareConditionPinned = true;
+
+// ---------------------------------------------------------------------------
+// GATE 6 - reread-tax hashing determinism and repeat accounting
+// ---------------------------------------------------------------------------
+const payloadA = "alpha payload\nwith lines";
+const payloadB = "beta payload";
+assert.equal(toolResultContentSha256([{ type: "text", text: payloadA }]), sha256Text(payloadA));
+assert.equal(toolResultContentSha256(payloadA), sha256Text(payloadA));
+assert.equal(
+  toolResultContentSha256([{ type: "text", text: payloadA }]),
+  toolResultContentSha256([{ type: "text", text: payloadA }]),
+);
+assert.notEqual(toolResultContentSha256(payloadA), toolResultContentSha256(payloadB));
+assert.equal(estimateTokens("abcd"), 1);
+assert.equal(estimateTokens("abcde"), 2);
+const ledgerRecord = (ordinal, toolName, text) => ({
+  ordinal,
+  toolName,
+  contentSha256: toolResultContentSha256(text),
+  chars: text.length,
+  bytes: Buffer.byteLength(text, "utf8"),
+  tokensEstimated: estimateTokens(text),
+});
+const rereadLedger = [
+  ledgerRecord(1, "repo_stage", payloadA),
+  ledgerRecord(2, "repo_stage", payloadB),
+  ledgerRecord(3, "read", payloadA),
+  ledgerRecord(4, "read", payloadA),
+];
+const tax = computeRereadTax(rereadLedger);
+assert.equal(tax.tokenEstimatorId, TOKEN_ESTIMATOR_ID);
+assert.equal(tax.toolResults, 4);
+assert.equal(tax.distinctPayloads, 2);
+assert.equal(tax.repeatResults, 2);
+assert.equal(tax.repeatBytes, 2 * Buffer.byteLength(payloadA, "utf8"));
+assert.equal(tax.repeatTokensEstimated, 2 * estimateTokens(payloadA));
+assert.deepEqual(computeRereadTax(rereadLedger), tax, "reread tax is not deterministic");
+assert.equal(computeRereadTax([ledgerRecord(1, "read", payloadA)]).repeatResults, 0);
+assert.throws(() => computeRereadTax([{ ...rereadLedger[0], contentSha256: "nope" }]),
+  /Invalid tool-result ledger record/);
+checks.rereadTaxHashingDeterministicAndRepeatCounted = true;
+
+// ---------------------------------------------------------------------------
+// GATE 7 - blind grading label separation
+// ---------------------------------------------------------------------------
+const salt = "0".repeat(32);
+assert.equal(submissionId("run-alpha", salt), submissionId("run-alpha", salt));
+assert.notEqual(submissionId("run-alpha", salt), submissionId("run-beta", salt));
+assert.notEqual(submissionId("run-alpha", salt), submissionId("run-alpha", "1".repeat(32)));
+assert.throws(() => submissionId("run-alpha", "short"), /campaign salt/);
+const goodPacket = {
+  version: 1,
+  rubric: { probe: ["correct"], deliverable: ["completeness"] },
+  groundTruth: { planSha256: "2".repeat(64), probes: [{ probeId: "probe-01", expectedAnswer: "AlphaConfig" }] },
+  submissions: [
+    { submissionId: submissionId("run-alpha", salt), probeAnswers: [{ probeId: "probe-01", answerText: "AlphaConfig" }], deliverables: [{ id: "d1", text: "a note" }] },
+  ],
+};
+assertBlindPacket(goodPacket);
+assert.throws(() => assertBlindPacket({
+  ...goodPacket,
+  submissions: [{ ...goodPacket.submissions[0], arm: "pifold" }],
+}), /identifying key|leaks the arm label/);
+assert.throws(() => assertBlindPacket({
+  ...goodPacket,
+  submissions: [{ ...goodPacket.submissions[0], runId: "run-alpha" }],
+}), /identifying key/);
+assert.throws(() => assertBlindPacket({
+  ...goodPacket,
+  submissions: [{ ...goodPacket.submissions[0], guidance: "pressure" }],
+}), /identifying key|leaks the guidance condition/);
+assert.throws(() => assertBlindPacket({ ...goodPacket, condition: "pifold" }),
+  /leaks the arm label pifold/);
+assert.throws(() => assertBlindPacket({ ...goodPacket, note: "curation profile run" }),
+  /leaks the guidance condition curation/);
+// Model-authored free text is deliberately exempt from the word scan and must stay so:
+// otherwise an ordinary English word in a deliverable would fail the packet.
+assertBlindPacket({
+  ...goodPacket,
+  submissions: [{
+    ...goodPacket.submissions[0],
+    deliverables: [{ id: "d1", text: "The native handler applies pressure to the buffer." }],
+  }],
+});
+// Order must not encode the arm either.
+const submissionIds = ["a", "b", "c", "d", "e", "f"].map((name) => submissionId(`run-${name}`, salt));
+assert.notDeepEqual(seededShuffle(submissionIds, `${salt}:submission-order`), submissionIds);
+assert.deepEqual(
+  seededShuffle(submissionIds, `${salt}:submission-order`),
+  seededShuffle(submissionIds, `${salt}:submission-order`),
+);
+checks.blindGradingSeparatesLabelsIdsAndOrder = true;
+
+// ---------------------------------------------------------------------------
+// GATE 8 - overflow signature recognition (the unmanaged arm's datum)
+// ---------------------------------------------------------------------------
+assert.equal(isWindowOverflow("Request too large: maximum context length is 272000 tokens"), true);
+assert.equal(isWindowOverflow("400 input length exceeds the model limit"), true);
+assert.equal(isWindowOverflow("ECONNRESET while streaming"), false);
+assert.equal(isWindowOverflow(null), false);
+checks.windowOverflowSignatureRecognized = true;
+
+// ---------------------------------------------------------------------------
+// GATE 9 - source shape: the arm really is the runtime configuration
+// ---------------------------------------------------------------------------
+const extension = source("scripts/pi_context_experiment_extension.mjs");
+const worker = source("scripts/run_pi_context_experiment_worker.mjs");
+const supervisor = source("scripts/run_pi_context_experiment.mjs");
+const adjudicator = source("scripts/adjudicate_pi_context_experiment.mjs");
+const grader = source("scripts/grade_pi_context_experiment.mjs");
+const launcher = source("scripts/launch_pi_context_experiment.sh");
+const staging = source("scripts/stage_pi_context_experiment.mjs");
+
+assert(extension.includes("const pifold = config.arm === \"pifold\"") &&
+  extension.includes("registerActiveContext(pi, {") &&
+  extension.includes("if (pifold) {"),
+"the extension must register the active-context runtime only for the pifold arm");
+// The model brief generator is DELETED from the package (2026-08-14): every fold briefs
+// deterministically, and a config still asking for one must be refused at the only point
+// that ever wired it, before any provider call, rather than silently measuring a build
+// that cannot honour it. Sealed manifests that recorded a generator stay readable.
+assert(extension.includes("config.briefGenerator === undefined") &&
+  /briefGenerator is deleted/.test(extension),
+"the extension must refuse a config that still asks for the deleted brief generator");
+assert(!extension.includes("createSummarizeContextSpan") &&
+  !extension.includes("summarizeContextSpan"),
+"the extension still wires the deleted brief generator");
+// The guidance profile is RETIRED. It shaped the milestone and live-advisory copy, and
+// both carriers are deleted, so a run that recorded a profile would be attesting to a
+// condition that changed nothing. The key stays readable for reps 15-21; no producer
+// may emit it, and the runtime no longer accepts it.
+for (const [name, text] of [["extension", extension], ["worker", worker], ["supervisor", supervisor]]) {
+  assert(!/guidance: config\.guidance|--guidance/.test(text),
+    `${name} still carries the retired guidance profile condition`);
+}
+assert(extension.includes('pi.on("session_before_compact"') &&
+  extension.includes('pi.on("session_compact"') &&
+  extension.includes("openStopTheWorld(\"native-compaction\"") &&
+  extension.includes("nativeCompactionDisposition(config.arm)") &&
+  extension.includes("compactionDisposition.latchOnCompletion"),
+"native compaction must be recorded by outcome: every pass an event, the latch on completion");
+assert(extension.includes("appendToolResult({") && extension.includes("toolResultContentSha256(content)"),
+  "every tool result must be hashed into the reread-tax ledger");
+assert(worker.includes("enabled: armRuntime.nativeCompactionEnabled,") &&
+  worker.includes("thinkingLevel: config.model.effort") &&
+  worker.includes("validateExperimentManifest(closedBook ? {"),
+"the worker must drive compaction from the arm, pin effort, and emit a validated manifest");
+assert(worker.includes("closedBook || checkoutSha256 === config.targetTreeSha256"),
+  "the worker must pin its checkout against the staged corpus on every arm run");
+assert(supervisor.includes("claimSlot(") && supervisor.includes("writeJsonExclusive(slotPath") &&
+  supervisor.includes("worktree\", \"add\", \"--quiet\", \"--detach\""),
+"the supervisor must claim an exclusive campaign slot and use a pinned detached worktree");
+// WHAT IS DELIVERED IS EXACTLY WHAT IS PINNED. There is no nonce spliced in after the pin
+// any more, so the payload hash covers every byte the model sees rather than every byte but
+// the last line.
+assert(supervisor.includes("renderStage(plan, planStage, checkoutDir)") &&
+  supervisor.includes("rendered payload does not match its planned hash") &&
+  !supervisor.includes("nextChallenge"),
+"the supervisor owns stage release and delivers exactly the payload it pin-checked");
+assert(adjudicator.includes("User-message contract broken") &&
+  adjudicator.includes("computeRereadTax(rereadRecords)") &&
+  adjudicator.includes("voluntaryFoldShare") &&
+  adjudicator.includes("overflowPoint") &&
+  adjudicator.includes("cacheRead") && adjudicator.includes("cacheWrite"),
+"the adjudicator must report usage splits, reread tax, voluntary-fold share and the overflow point");
+assert(adjudicator.includes("usageSeriesFromLedger(ledger)") &&
+  adjudicator.includes("thinkTimeFromPace(paceRecords)") &&
+  adjudicator.includes("probeTranscripts({ entries: runEntries, plan, pushDelivered })") &&
+  adjudicator.includes("headlineMutationMetric: \"usage.mutations\"") &&
+  adjudicator.includes("totalFoldsCounts: \"fold-records\""),
+"the adjudicator must report the per-request usage series, observed mutations and the stall proxy, and must say that totalFolds counts fold records");
+// A TRAILING STAGE CALL CANNOT HAPPEN ANY MORE. `stageCallDisposition` answered a model
+// that called the delivery tool once more after the last stage, which a finished assignment
+// being tidy did on a completed 64/64 native run and which latching once voided. The model
+// does not ask for stages at all now, so the disposition has no caller; it stays EXPORTED
+// because the sealed corpus's tool-result ledgers are full of the calls it classified.
+assert(!extension.includes("stageCallDisposition("),
+  "the extension still classifies stage calls the model can no longer make");
+assert(!adjudicator.includes("acceptance: true"),
+  "the adjudicator must not authorize anything");
+assert(grader.includes("assertBlindPacket(packet)") &&
+  grader.includes("join(campaignDir, `grading-key${dirSuffix}`)") &&
+  grader.includes("must not share a directory") &&
+  grader.includes("adjudicatorSourceSha8()") &&
+  grader.includes("--regrade"),
+"the grader must build a blind packet, keep the arm mapping in a separate directory, prefer re-adjudication sidecars, and pool regrades into hash-suffixed directories");
+assert(grader.includes("Campaign mixes adjudicator versions") &&
+  grader.includes("new Set(evidence.map((run) => run.evidence.adjudicatorSourceSha256))") &&
+  grader.includes("adjudicators.size === 1"),
+"the grader must refuse a campaign whose runs were adjudicated by different adjudicator versions");
+assert(launcher.startsWith("#!/bin/bash -p") &&
+  launcher.includes("--setenv=PI_FOLD_SANITIZED=1") &&
+  launcher.includes("UnsetEnvironment=NODE_OPTIONS") &&
+  launcher.includes("refusing an experiment launch from a dirty worktree"),
+"the launcher must sanitize its environment and refuse a dirty worktree");
+// The unit deadline is DERIVED from the plan's watchdog and sits strictly above it.
+//
+// It was the literal `RuntimeMaxSec=305m`, correct only while the watchdog was 300
+// minutes. Raising full mode to 360 on 2026-08-11 left it behind, and systemd then
+// killed every full run 55 minutes early, during or after the closing phase and always
+// before a seal: no full-mode run has sealed since, including one that had finished all
+// 64 stages. Two literals that must agree and are written in different languages will
+// drift again, so the launcher reads the number rather than restating it, and this
+// asserts that it cannot go back to a literal.
+assert(!/RuntimeMaxSec=[0-9]+(m|s|min)/.test(launcher),
+  "the launcher writes a literal unit deadline again instead of deriving it from the plan");
+assert(/WATCHDOG_MS=.*watchdogMs/.test(launcher) &&
+  launcher.includes("RUNTIME_MAX_SEC=$(( WATCHDOG_MS / 1000 + 300 ))") &&
+  launcher.includes('RuntimeMaxSec=${RUNTIME_MAX_SEC}s'),
+"the launcher must derive its unit deadline from the plan's own watchdog, above that watchdog");
+// AND SO MUST TimeoutStartSec (2026-08-25). It sat at a literal 6h beside the derived
+// RuntimeMaxSec and is a SECOND ceiling, not a startup grace period: the unit is Type=
+// oneshot with RemainAfterExit, so the whole run is the start operation and the smaller of
+// the two bounds wins. It was harmless only while the watchdog was 360 minutes; raising it
+// to 600 would have capped every full run at six hours with no seal written, which is the
+// 2026-08-11 defect verbatim one property over. Found by reading the unit properties when
+// the watchdog moved, not by a run dying.
+assert(!/TimeoutStartSec=[0-9]+(h|m|s|min)"/.test(launcher),
+  "the launcher writes a literal TimeoutStartSec again, a second ceiling that cannot follow the watchdog");
+assert(launcher.includes("TIMEOUT_START_SEC=$RUNTIME_MAX_SEC") &&
+  launcher.includes('TimeoutStartSec=${TIMEOUT_START_SEC}s'),
+"the launcher must derive TimeoutStartSec from the same number as its unit deadline");
+for (const [name, plan] of Object.entries(EXPERIMENT_MODE_PLANS)) {
+  assert(Number.isFinite(plan.watchdogMs) && plan.watchdogMs > 0,
+    `mode ${name} declares no usable watchdogMs for the launcher to derive a deadline from`);
+}
+assert(staging.includes("worktree\", \"add\", \"--quiet\", \"--detach\"") &&
+  staging.includes("expected the pinned"),
+"staging must fetch the pinned commit and check it out as a detached worktree");
+checks.sourceShapeBindsArmToRuntime = true;
+
+// ---------------------------------------------------------------------------
+// GATE 10 - repo registry stats are present for every candidate
+// ---------------------------------------------------------------------------
+for (const [key, entry] of Object.entries(EXPERIMENT_REPOS)) {
+  assert.equal(entry.key, key);
+  assert(/^[0-9a-f]{40}$/.test(entry.commit), `${key} is not pinned to a commit`);
+  assert(entry.license && entry.language, `${key} lacks licence or language`);
+  assert(entry.stats.sourceFiles > 0 && entry.stats.sourceLines > 0 && entry.stats.sourceChars > 0,
+    `${key} lacks measured corpus stats`);
+}
+// The default must be able to carry the full mode plan's payload demand. EVERY stage
+// carries payload now: the four probe waves that delivered no files are deleted, so the
+// corpus has to supply four more stages than it did before.
+const fullPlan = EXPERIMENT_MODE_PLANS.full;
+const payloadStages = fullPlan.stageCount;
+assert(EXPERIMENT_REPOS[EXPERIMENT_DEFAULT_REPO].stats.sourceChars >=
+  payloadStages * fullPlan.payloadTargetChars,
+`default repo ${EXPERIMENT_DEFAULT_REPO} cannot supply ${payloadStages} stages of unique payload`);
+checks.defaultRepoCarriesTheFullPlan = true;
+
+// ---------------------------------------------------------------------------
+// GATE 11 - end-to-end blind grading: the real script, a real packet, a real key
+// ---------------------------------------------------------------------------
+const campaign = mkdtempSync(join(tmpdir(), "pi-context-experiment-campaign-"));
+try {
+  const planPath = join(campaign, "stages-smoke.json");
+  writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`);
+  for (const [index, arm] of EXPERIMENT_ARMS.entries()) {
+    const runId = `2026-08-05T00-00-0${index}Z-${arm}-rep1-aaaa000${index}`;
+    const runDir = join(campaign, "runs", runId);
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, "run-config.json"), JSON.stringify({ planPath }));
+    writeFileSync(join(runDir, "experiment-evidence.json"), JSON.stringify({
+      ok: true,
+      runId,
+      runDir,
+      arm,
+      guidance: "pressure",
+      repetition: 1,
+      probes: plan.stages.filter((stage) => stage.probes.length > 0).map((stage) => ({
+        stage: stage.ordinal,
+        delivered: true,
+        rawText: "…",
+        answers: stage.probes.map((probe) => ({
+          probeId: probe.id, kind: probe.kind, question: probe.question,
+          answerText: `an answer from ${arm}`, parsed: true,
+        })),
+      })),
+      deliverables: plan.stages.filter((stage) => stage.deliverable).map((stage) => ({
+        id: stage.deliverable.id, stage: stage.ordinal, delivered: true,
+        text: "The native handler applies pressure to the buffer.",
+      })),
+      evidence: { planSha256: plan.planSha256 },
+    }, null, 2));
+  }
+  const graded = spawnSync(process.execPath, [
+    join(PROJECT, "scripts", "grade_pi_context_experiment.mjs"),
+    "--campaign-dir", campaign, "--dry-run", "--salt", "0".repeat(32),
+  ], { cwd: PROJECT, encoding: "utf8", timeout: 120_000 });
+  assert.equal(graded.status, 0, `blind grading dry run failed: ${graded.stderr || graded.stdout}`);
+  const gradingResult = JSON.parse(graded.stdout);
+  assert.equal(gradingResult.ok, true);
+  assert.equal(gradingResult.submissions, EXPERIMENT_ARMS.length);
+  const packet = JSON.parse(readFileSync(gradingResult.packetPath, "utf8"));
+  const key = JSON.parse(readFileSync(gradingResult.keyPath, "utf8"));
+  assert.notEqual(dirname(gradingResult.packetPath), dirname(gradingResult.keyPath),
+    "packet and key must not share a directory");
+  const packetText = JSON.stringify(packet);
+  for (const arm of EXPERIMENT_ARMS) {
+    assert(!new RegExp(`"[^"]*${arm}[^"]*"\\s*:`).test(packetText),
+      `packet exposes ${arm} as a field name`);
+  }
+  for (const mapping of key.mapping) {
+    assert(!packetText.includes(mapping.runId), "packet leaks a run id");
+    assert(packet.submissions.some((submission) => submission.submissionId === mapping.submissionId),
+      "key maps a submission the packet does not contain");
+  }
+  // The key, and only the key, carries the arm assignment.
+  assert.deepEqual([...key.mapping].map((entry) => entry.arm).sort(), [...EXPERIMENT_ARMS].sort());
+  checks.blindGradingEndToEndKeepsTheKeyOutOfThePacket = true;
+  // Ground truth reaches the grader with its class split: conversation probes
+  // carry the carrier stage, derived probes the step stage or anchor file, repo
+  // probes the file position, nothing is classless, and echo probes NEVER enter
+  // the packet (their truth is per-run, which would encode the run identity).
+  const gtProbes = packet.groundTruth.probes;
+  assert(gtProbes.every((probe) => ["conversation", "derived", "repository"].includes(probe.class)));
+  assert(gtProbes.every((probe) => probe.kind !== "echo"),
+    "an echo probe reached the blind packet");
+  assert(gtProbes.filter((probe) => probe.class === "conversation")
+    .every((probe) => Number.isSafeInteger(probe.sourceStage) && !Object.hasOwn(probe, "sourcePath")));
+  assert(gtProbes.filter((probe) => probe.kind === "chain-link")
+    .every((probe) => Number.isSafeInteger(probe.sourceStage)));
+  assert(gtProbes.filter((probe) => probe.class === "repository")
+    .every((probe) => probe.sourcePath && probe.sourceLine > 0 && !Object.hasOwn(probe, "sourceStage")));
+  assert(gtProbes.some((probe) => probe.class === "conversation") &&
+    gtProbes.some((probe) => probe.class === "derived") &&
+    gtProbes.some((probe) => probe.class === "repository"),
+  "the packet must carry every graded probe class");
+  const echoIds = new Set(plan.stages.flatMap((stage) =>
+    stage.probes.filter((probe) => probe.kind === "echo").map((probe) => probe.id)));
+  assert(echoIds.size > 0 && packet.submissions.every((submission) =>
+    submission.probeAnswers.every((answer) => !echoIds.has(answer.probeId))),
+  "an echo answer reached the blind packet");
+  checks.gradingGroundTruthCarriesProbeClasses = true;
+} finally {
+  rmSync(campaign, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// GATE 12 - displaced probe/deliverable extraction
+//
+// The measured failure: in the pifold rep-2 full run the model answered probe waves 48
+// and 64 one message slot LATE (it issued the next stage call first), and ONE stale-key
+// retry at call 41 inserted an extra repo_stage result that shifted every positional index
+// after it. The old extractor recorded rawText "" for wave 48, stage-63 prose for wave 64,
+// and an empty deliverable-56. This fixture reproduces both faults at once.
+// ---------------------------------------------------------------------------
+{
+  const displaced = [];
+  let entryId = 0;
+  const push = (message) => {
+    displaced.push({ id: `entry-${String(entryId += 1).padStart(3, "0")}`, type: "message", message });
+    return displaced.length - 1;
+  };
+  const assistant = (text, toolCallId) => push({
+    role: "assistant",
+    content: [
+      ...(text ? [{ type: "text", text }] : []),
+      ...(toolCallId ? [{ type: "toolCall", id: toolCallId, name: "repo_stage", arguments: {} }] : []),
+    ],
+  });
+  const stageResult = (toolCallId, stage) => push({
+    role: "toolResult", toolName: "repo_stage", toolCallId, isError: false,
+    content: [{ type: "text", text: `STAGE ${stage}` }], details: { stage },
+  });
+  assistant("", "c1"); stageResult("c1", 1);
+  assistant("read stage 1", "c2"); stageResult("c2", 2);
+  assistant("read stage 2", "c3");
+  const stage3Result = stageResult("c3", 3);
+  // The stale-key retry: an errored stage result with NO stage ordinal. Positional
+  // extraction is off by one from here on; ordinal-addressed extraction is not.
+  assistant("", "c-stale");
+  push({
+    role: "toolResult", toolName: "repo_stage", toolCallId: "c-stale", isError: true,
+    content: [{ type: "text", text: "That key is not the current NEXT_KEY." }],
+  });
+  assistant("interim note about stage 3", "c4");
+  const stage4Result = stageResult("c4", 4);
+  const deliverable3Index = assistant("### Deliverable 03 — component model", "c5");
+  stageResult("c5", 5);
+  const probe4Index = assistant("probe-04-01: 1\nprobe-04-02: cw-000001\nprobe-04-03: AlphaConfig", "c6");
+  stageResult("c6", 6);
+  const deliverable6Index = assistant("an untitled deliverable body", "c7");
+  stageResult("c7", 7);
+  assistant("", "c8");
+  stageResult("c8", 8);
+  assistant("closing synthesis");
+
+  const displacedProbes = probeTranscripts({ entries: displaced, plan });
+  assert.deepEqual(displacedProbes.map((probe) => probe.stage),
+    EXPERIMENT_MODE_PLANS.smoke.sealedProbeSchedule.stages.slice());
+  // Wave 4 was answered one message late, past a non-empty message that is not an answer.
+  assert.equal(displacedProbes[0].rawText, displaced[probe4Index].message.content[0].text);
+  assert.equal(displacedProbes[0].messagesSkipped, 1,
+    "the displaced answer must be recorded as displaced, not silently relocated");
+  assert.deepEqual(displacedProbes[0].answers.map((answer) => answer.answerText),
+    ["1", "cw-000001", "AlphaConfig"]);
+  assert(displacedProbes[0].answers.every((answer) => answer.parsed));
+  // Wave 8 was genuinely never answered: the scan must NOT credit it with anything,
+  // and its bound stops at the next wave's territory.
+  assert.equal(displacedProbes[1].rawText, "");
+  assert.equal(displacedProbes[1].messagesSkipped, null);
+  assert(displacedProbes[1].answers.every((answer) => !answer.parsed && answer.answerText === null));
+
+  const displacedDeliverables = deliverableTranscripts({ entries: displaced, plan });
+  assert.deepEqual(displacedDeliverables.map((deliverable) => deliverable.id),
+    ["deliverable-3", "deliverable-6"]);
+  assert.equal(displacedDeliverables[0].text, displaced[deliverable3Index].message.content[0].text);
+  assert.equal(displacedDeliverables[0].matchedHeading, true);
+  assert.equal(displacedDeliverables[0].messagesSkipped, 1);
+  // Untitled deliverable: the first non-empty block in the window is the fallback, and the
+  // report says plainly that no heading matched.
+  assert.equal(displacedDeliverables[1].text, displaced[deliverable6Index].message.content[0].text);
+  assert.equal(displacedDeliverables[1].matchedHeading, false);
+
+  // The naive "message immediately after the stage result" rule is what broke: prove the
+  // fixture really does displace, so this gate cannot pass by accident.
+  assert.equal(displaced[stage4Result + 1].message.content[0].text,
+    "### Deliverable 03 — component model");
+  assert.equal(displaced[stage3Result + 1].message.content.length, 1,
+    "the stale-key retry must sit immediately after the stage-3 result");
+
+  // A stage that never produced a result is reported as undelivered, never as empty prose.
+  const truncated = displaced.slice(0, stage4Result);
+  assert.deepEqual(probeTranscripts({ entries: truncated, plan })
+    .map((probe) => probe.delivered), [false, false]);
+  checks.displacedProbeAndDeliverableAnswersAreRecovered = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 13 - per-request usage series and OBSERVED prefix invalidations
+// ---------------------------------------------------------------------------
+{
+  const ledger = [];
+  const exchange = (ordinal, wallMs, usage) => {
+    ledger.push({ kind: "provider-request", ordinal, wallMs });
+    ledger.push({ kind: "provider-response", requestOrdinal: ordinal, usage });
+  };
+  exchange(1, 1_000, { input: 1_000, cacheRead: 0, cacheWrite: 0, output: 10 });
+  exchange(3, 3_000, { input: 200, cacheRead: 1_000, cacheWrite: 0, output: 20 });
+  exchange(5, 9_000, { input: 5_000, cacheRead: 0, cacheWrite: 0, output: 30 });
+  exchange(7, 10_000, { input: 100, cacheRead: 5_000, cacheWrite: 0, output: 40 });
+  exchange(9, 11_000, { input: 60, cacheRead: 5_040, cacheWrite: 0, output: 50 });
+  const usageSeries = usageSeriesFromLedger(ledger);
+  assert.equal(usageSeries.series.length, 5);
+  assert.deepEqual(usageSeries.series.map((entry) => entry.ordinal), [1, 2, 3, 4, 5]);
+  // Only the third request re-paid for a prefix it had already paid for.
+  assert.deepEqual(usageSeries.series.map((entry) => entry.mutation),
+    [false, false, true, false, false]);
+  assert.equal(usageSeries.mutations, 1);
+  // The wall-clock gap is what separates a mutation from a provider cache TTL eviction.
+  assert.deepEqual(usageSeries.series.map((entry) => entry.interRequestWallMs),
+    [null, 2_000, 6_000, 1_000, 1_000]);
+  assert.equal(usageSeries.series[0].cacheShare, 0);
+  assert.equal(usageSeries.series[1].cacheShare, 1_000 / 1_200);
+  assert.equal(usageSeries.mutationRule.absoluteToleranceTokens, MUTATION_ABSOLUTE_TOLERANCE_TOKENS);
+  assert.equal(usageSeries.mutationRule.comparableRequests, 4);
+  // A dip smaller than the tolerance is cache-block granularity, not an invalidation.
+  const shallow = usageSeriesFromLedger([
+    { kind: "provider-request", ordinal: 1, wallMs: 0 },
+    { kind: "provider-response", requestOrdinal: 1, usage: { input: 100_000, cacheRead: 0 } },
+    { kind: "provider-request", ordinal: 3, wallMs: 1_000 },
+    { kind: "provider-response", requestOrdinal: 3, usage: { input: 1_500, cacheRead: 99_000 } },
+  ]);
+  assert.equal(shallow.mutations, 0);
+  // Cache creation tokens are prompt tokens too. They must sit in both the request
+  // denominator and the next request's reusable-prefix baseline.
+  const withWrites = usageSeriesFromLedger([
+    { kind: "provider-request", ordinal: 1, wallMs: 0 },
+    { kind: "provider-response", requestOrdinal: 1,
+      usage: { input: 1_000, cacheRead: 0, cacheWrite: 3_000 } },
+    { kind: "provider-request", ordinal: 2, wallMs: 1_000 },
+    { kind: "provider-response", requestOrdinal: 2,
+      usage: { input: 500, cacheRead: 4_000, cacheWrite: 500 } },
+  ]);
+  assert.deepEqual(withWrites.series.map((entry) => entry.cacheWrite), [3_000, 500]);
+  assert.equal(withWrites.series[1].cacheShare, 4_000 / 5_000,
+    "cache writes vanished from the per-request prompt denominator");
+  assert.equal(withWrites.pooledCacheShare, 4_000 / 9_000,
+    "cache writes vanished from the pooled prompt denominator");
+  assert.equal(withWrites.mutations, 0,
+    "a prefix written on the prior request was unavailable to the mutation baseline");
+  assert.match(withWrites.mutationRule.definition, /cacheWrite/);
+  // Token-weighted pooled share beside the per-request mean: 11,040 cached of 17,400 input.
+  assert.equal(usageSeries.pooledCacheShare, 11_040 / 17_400);
+  assert.equal(usageSeriesFromLedger([]).pooledCacheShare, null);
+  assert.deepEqual(usageSeriesFromLedger(ledger), usageSeries, "usage series is not deterministic");
+  assert.equal(usageSeriesFromLedger([]).mutations, 0);
+  checks.usageSeriesAttributesMutationsAgainstProviderCacheAccounting = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 14 - stall proxy: the agent's own think time between stages
+// ---------------------------------------------------------------------------
+{
+  const pace = [
+    { stage: 1, requestedMonotonicMs: 0, releasedMonotonicMs: 100 },
+    { stage: 2, requestedMonotonicMs: 1_100, releasedMonotonicMs: 1_200 },
+    { stage: 3, requestedMonotonicMs: 5_200, releasedMonotonicMs: 5_300 },
+    { stage: 4, requestedMonotonicMs: 5_400, releasedMonotonicMs: 5_500 },
+  ];
+  const think = thinkTimeFromPace(pace);
+  assert.equal(think.samples, 3);
+  assert.deepEqual(think.perStage.map((entry) => entry.thinkMs), [1_000, 4_000, 100]);
+  assert.deepEqual(think.perStage.map((entry) => entry.afterStage), [1, 2, 3]);
+  assert.equal(think.maxMs, 4_000);
+  assert.equal(think.p95Ms, 4_000);
+  assert.equal(think.medianMs, 1_000);
+  assert.equal(thinkTimeFromPace([]).samples, 0);
+  assert.equal(thinkTimeFromPace([]).maxMs, null);
+  assert.throws(() => thinkTimeFromPace([
+    { stage: 1, releasedMonotonicMs: 0 }, { stage: 2 },
+  ]), /lacks monotonic clocks/);
+  checks.stallProxyMeasuresAgentThinkTimePerStage = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 15 - a completed plan answers a trailing stage call instead of latching it
+//
+// One trailing repo_stage call after stage 64 voided a completed 64/64 native run. A
+// finished assignment being tidy is not a capability breach; a REPLAYED tool call id is.
+// ---------------------------------------------------------------------------
+{
+  const used = new Set(["already-served"]);
+  const serve = stageCallDisposition({
+    expectedStage: 3, stageCount: 8, toolCallId: "fresh", usedToolCallIds: used,
+  });
+  assert.equal(serve.kind, "serve");
+  assert.equal(serve.latch, false);
+  const replay = stageCallDisposition({
+    expectedStage: 3, stageCount: 8, toolCallId: "already-served", usedToolCallIds: used,
+  });
+  assert.deepEqual(replay, { kind: "replay", latch: true, isError: true });
+  const postPlan = stageCallDisposition({
+    expectedStage: 9, stageCount: 8, toolCallId: "trailing", usedToolCallIds: used,
+  });
+  assert.equal(postPlan.kind, "post-plan");
+  assert.equal(postPlan.latch, false);
+  assert.equal(postPlan.isError, false);
+  assert.equal(postPlan.text, "plan complete: all 8 stages served");
+  // A replay stays latched even after the plan is complete.
+  assert.equal(stageCallDisposition({
+    expectedStage: 9, stageCount: 8, toolCallId: "already-served", usedToolCallIds: used,
+  }).kind, "replay");
+  assert.throws(() => stageCallDisposition({
+    expectedStage: 0, stageCount: 8, toolCallId: "x", usedToolCallIds: used,
+  }), /stage counters/);
+  checks.completedPlanAnswersTrailingStageCallWithoutLatching = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 16 - re-adjudication writes a named sidecar and never overwrites
+// ---------------------------------------------------------------------------
+{
+  const reAdjudicator = source("scripts/adjudicate_pi_context_experiment.mjs");
+  assert(reAdjudicator.includes("--re-adjudicate") &&
+    reAdjudicator.includes("`experiment-evidence.${report.evidence.adjudicatorSourceSha256.slice(0, 8)}.json`") &&
+    reAdjudicator.includes("writeJsonExclusive(evidencePath, report)"),
+  "re-adjudication must write experiment-evidence.<first8 of adjudicatorSourceSha256>.json exclusively");
+  assert(!/_v\d|evidence-new|evidence-old/.test(reAdjudicator),
+    "the re-adjudication sidecar must not carry a version-suffix name");
+  const rejected = spawnSync(process.execPath, [
+    join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"),
+    "/nonexistent-run-dir", "--rewrite-everything",
+  ], { cwd: PROJECT, encoding: "utf8", timeout: 60_000 });
+  assert.equal(rejected.status, 1);
+  assert(/accepts only --re-adjudicate/.test(rejected.stdout),
+    `unknown adjudicator flags must be refused: ${rejected.stdout}`);
+  const missing = spawnSync(process.execPath, [
+    join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"),
+    "--re-adjudicate", "/nonexistent-run-dir",
+  ], { cwd: PROJECT, encoding: "utf8", timeout: 60_000 });
+  assert.equal(missing.status, 1);
+  assert(/requires a run directory/.test(missing.stdout),
+    `the flag must not be parsed as the run directory: ${missing.stdout}`);
+  checks.reAdjudicationWritesANamedSidecarAndNeverOverwrites = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 17 - the fold-scheduling dial is retired: tolerated on read, emitted by nobody,
+// and the epoch scheduler is pinned unconditionally
+// ---------------------------------------------------------------------------
+{
+  assert.deepEqual([...EXPERIMENT_FOLD_SCHEDULING], ["immediate", "epoch"]);
+  assert.equal(EXPERIMENT_SCHEDULING_SOURCE, "extensions/lib/scheduling.ts");
+  // Sealed run directories are immutable data: reps 1-23 recorded foldScheduling, and
+  // the paper's second experiment is an immediate-vs-epoch pairing, so BOTH values must
+  // keep validating on read. A run config written after the deletion carries no key.
+  validateExperimentRunConfig(runConfig);
+  validateExperimentRunConfig({ ...runConfig, foldScheduling: "epoch" });
+  validateExperimentRunConfig({ ...runConfig, foldScheduling: "immediate" });
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, foldScheduling: "eventual" }),
+    /fold scheduling is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, foldSchedule: "epoch" }),
+    /run config shape/);
+  validateExperimentManifest(manifest);
+  validateExperimentManifest({ ...manifest, foldScheduling: "epoch" });
+  validateExperimentManifest({ ...manifest, foldScheduling: "immediate" });
+  assert.throws(() => validateExperimentManifest({ ...manifest, foldScheduling: "eventual" }),
+    /fold scheduling is not a shipped package option/);
+  assert.throws(() => validateExperimentManifest({ ...manifest, foldSchedule: "epoch" }),
+    /manifest shape/);
+  // NO PRODUCER. The runtime refuses the option at construction now, so a script that
+  // still threaded it would abort the very run it configured.
+  for (const [name, text] of [
+    ["extension", extension], ["worker", worker], ["supervisor", supervisor],
+  ]) {
+    assert(!/foldScheduling/.test(text), `${name} still threads the retired fold-scheduling dial`);
+  }
+  // The epoch scheduler source is pinned unconditionally: a run that cannot pin the code
+  // implementing its own condition is not the experiment.
+  assert(supervisor.includes("experimentSourceHashes()") &&
+    supervisor.includes("assertExperiment(existsSync(join(PROJECT, EXPERIMENT_SCHEDULING_SOURCE))") &&
+    supervisor.includes("assertExperiment(runtimePaths.includes(EXPERIMENT_SCHEDULING_SOURCE)"),
+  "the supervisor must pin the whole runtime source tree and require the epoch scheduler");
+  // The adjudicator reports the key from artifacts that carry it, and reads an ABSENT
+  // key as epoch: every pre-deletion artifact wrote it explicitly, so absent means the
+  // run was configured after the deletion. Defaulting to the shipped-through-1.0.2
+  // value here would publish every future epoch run as "immediate".
+  assert(adjudicator.includes('foldScheduling: config.foldScheduling ?? "epoch"'),
+    "the adjudicator must read an absent fold-scheduling key as epoch");
+  checks.foldSchedulingRetiredAndReadOnly = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 21 - the peek-fold dial is retired: tolerated on read, emitted by nobody
+// ---------------------------------------------------------------------------
+{
+  // Same precedent, same shape: reps 15-23 recorded it, so both values keep validating.
+  validateExperimentRunConfig(runConfig);
+  validateExperimentRunConfig({ ...runConfig, foldPeekResults: true });
+  validateExperimentRunConfig({ ...runConfig, foldPeekResults: false });
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, foldPeekResults: "true" }),
+    /peek-fold condition is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, foldPeek: true }),
+    /run config shape/);
+  validateExperimentManifest({ ...manifest, foldPeekResults: true });
+  validateExperimentManifest({ ...manifest, foldPeekResults: false });
+  assert.throws(() => validateExperimentManifest({ ...manifest, foldPeekResults: "true" }),
+    /peek-fold condition is not a boolean/);
+  assert.throws(() => validateExperimentManifest({ ...manifest, foldPeek: true }),
+    /manifest shape/);
+  for (const [name, text] of [
+    ["extension", extension], ["worker", worker], ["supervisor", supervisor],
+  ]) {
+    assert(!/foldPeekResults/.test(text), `${name} still threads the retired peek-fold dial`);
+  }
+  assert(adjudicator.includes("foldPeekResults: config.foldPeekResults ?? true"),
+    "the adjudicator must read an absent peek-fold key as foldable");
+  checks.foldPeekResultsRetiredAndReadOnly = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 22 - guided curation is threaded from the launcher to the registration, and the
+// retired reliability-lever condition is gone from scripts/ entirely
+// ---------------------------------------------------------------------------
+{
+  assert.equal(EXPERIMENT_DEFAULT_GUIDED_CURATION, false);
+  // Runs sealed before the dial existed carry no key and still adjudicate.
+  validateExperimentRunConfig(runConfig);
+  validateExperimentRunConfig({ ...runConfig, foldScheduling: "epoch", guidedCuration: true });
+  validateExperimentRunConfig({ ...runConfig, guidedCuration: false });
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, guidedCuration: "true" }),
+    /guided-curation condition is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, guidedCurated: true }),
+    /run config shape/);
+  assert.throws(() => validateExperimentManifest({ ...manifest, guidedCuration: "true" }),
+    /guided-curation condition is not a boolean/);
+  assert.throws(() => validateExperimentManifest({ ...manifest, guidedCurated: true }),
+    /manifest shape/);
+  // Sealed run directories are immutable data: runs 10-14 recorded reliabilityLevers and
+  // runs 15-21 recorded guidedCuration and guidance, so reading them must still validate.
+  validateExperimentRunConfig({ ...runConfig, reliabilityLevers: true });
+  validateExperimentManifest({ ...manifest, reliabilityLevers: true });
+  validateExperimentRunConfig({ ...runConfig, guidedCuration: true, guidance: "curation" });
+  validateExperimentManifest({ ...manifest, guidedCuration: true, guidance: "curation" });
+
+  // RETIRED CONDITION DIALS. `guidedCuration` announced a pending commit and gave the
+  // agent a bounded last call; `guidance` chose between milestone/advisory copy sets.
+  // Both are gone from the runtime, because an announcement has to arrive BEFORE the
+  // event it announces and therefore has to break a prefix nothing else was breaking.
+  // A producer that still emitted either would attest to a condition that changed
+  // nothing, which is worse than not recording it at all: the run config is the
+  // experiment's claim about what varied.
+  for (const [name, text] of [
+    ["extension", extension], ["worker", worker],
+    ["supervisor", supervisor], ["adjudicator", adjudicator],
+  ]) {
+    assert(!/guidedCuration:|guidance: config\.guidance/.test(text),
+      `${name} still emits a retired condition dial`);
+  }
+  assert(!/--guided-curation|--guidance|GUIDED_CURATION|GUIDANCE=/.test(launcher) &&
+    !/--fold-scheduling|FOLD_SCHEDULING|--fold-peek-results|FOLD_PEEK_RESULTS/.test(launcher),
+  "the shell launcher still accepts a retired condition dial");
+  // Removal-and-debt: the retired option set must not survive anywhere in scripts/ as
+  // callable code — an anti-pattern left callable gets recomposed. The needle is
+  // assembled so this gate does not match itself.
+  const retiredOptions = ["RELIABILITY", "LEVER"].join("_");
+  const survivors = spawnSync("/usr/bin/grep", ["-rlF", retiredOptions, join(PROJECT, "scripts")],
+    { encoding: "utf8" });
+  assert.equal(survivors.status, 1,
+    `${retiredOptions} must be purged from scripts/; still present in:\n${survivors.stdout}`);
+  checks.retiredConditionDialsEmittedByNobody = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 23 - the provider-input-budget deployment fact is resolved from the PROVIDER and
+// model pin together and threaded supervisor -> run config -> manifest -> registration, so
+// no run can measure its curation thresholds against the per-request descriptor budget
+// again (rep 16's abort), and the retired gross-window key stays readable on sealed runs
+// ---------------------------------------------------------------------------
+{
+  // Keyed by provider AND model: capacity is a fact about a deployment, and the same
+  // model id behind another provider is another wire. Stated already net, which is the
+  // shape the runtime now takes.
+  //
+  // Both entries now hold the same number, and the reason is not that the wires turned out
+  // alike. It is that the wire stopped being the binding constraint: Pi meters the ANSWER
+  // against the descriptor's declared window, so a serving budget the wire would happily
+  // accept still leaves the model no room to reply. Both deployments declare 272,000, so
+  // both land on 272,000 less Pi's 4,096 reserve less the 16,384 of output that rep 1
+  // established empirically by dying without it. Luna's separately measured wire refusal at
+  // approximately 377,800 is real and simply no longer binds, which is why it is not the
+  // number here.
+  const OUTPUT_HEADROOM = 16_384;
+  for (const key of ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-sol"]) {
+    assert.equal(EXPERIMENT_PROVIDER_INPUT_BUDGETS[key], 251_520, `${key} serving budget`);
+    // Derived, not asserted as a magic number: a descriptor change must move this or fail.
+    assert.equal(EXPERIMENT_PROVIDER_INPUT_BUDGETS[key],
+      272_000 - PI_OUTPUT_BUDGET.safetyTokens - OUTPUT_HEADROOM,
+      `${key} budget no longer matches the window arithmetic it is derived from`);
+    // The property the number exists for: a request that fills the whole budget must still
+    // be served a real answer rather than the API floor.
+    assert.equal(
+      servedOutputBudget({
+        contextWindow: 272_000,
+        contextChars: EXPERIMENT_PROVIDER_INPUT_BUDGETS[key] * PI_OUTPUT_BUDGET.charsPerToken,
+        modelMaxTokens: 128_000,
+      }),
+      OUTPUT_HEADROOM,
+      `${key} at full occupancy does not leave the model room to answer`);
+  }
+  // Anti-vacuity: the budget that shipped through sol-20260811 rep 2 fails that property,
+  // which is the defect this correction exists to remove.
+  assert.equal(
+    servedOutputBudget({
+      contextWindow: 272_000,
+      contextChars: 383_616 * PI_OUTPUT_BUDGET.charsPerToken,
+      modelMaxTokens: 128_000,
+    }),
+    PI_OUTPUT_BUDGET.apiFloorTokens,
+    "the superseded 383,616 budget must still demonstrate the starvation it caused");
+  assert.equal(EXPERIMENT_PROVIDER_INPUT_BUDGETS["gpt-5.6-sol"], undefined);
+  validateExperimentRunConfig({ ...runConfig, providerInputBudget: 383_616 });
+  validateExperimentRunConfig(runConfig); // unlisted deployments carry no key: descriptor mode
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, providerInputBudget: 0 }),
+    /provider input budget is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, providerInputBudget: "383616" }),
+    /provider input budget is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, providerWindow: 400_000 }),
+    /run config shape/);
+  validateExperimentManifest({ ...manifest, providerInputBudget: 383_616 });
+  validateExperimentManifest(manifest);
+  assert.throws(() => validateExperimentManifest({ ...manifest, providerInputBudget: -1 }),
+    /provider input budget is invalid/);
+  // The gross-window key is RETIRED, not forbidden: runs 15-23 recorded it and their
+  // sealed configs are immutable data, so they must keep validating while nothing emits it.
+  validateExperimentRunConfig({ ...runConfig, providerTotalWindow: 400_000 });
+  validateExperimentManifest({ ...manifest, providerTotalWindow: 400_000 });
+  assert.equal(supervisor.includes("EXPERIMENT_PROVIDER_TOTAL_WINDOWS"), false,
+    "the supervisor still resolves the retired gross-window fact");
+  assert(supervisor.includes("EXPERIMENT_PROVIDER_INPUT_BUDGETS[`${modelProvider}/${modelId}`] ?? null") &&
+    supervisor.includes("{ providerInputBudget }"),
+  "the supervisor must resolve the deployment fact from provider plus model and record it");
+  assert(worker.includes("{ providerInputBudget: config.providerInputBudget }"),
+    "the worker must pin the run's serving-budget fact in the sealed manifest");
+  assert(extension.includes("{ providerInputBudget: config.providerInputBudget }"),
+    "the extension must pass the deployment fact into the active-context registration");
+  assert(adjudicator.includes("providerInputBudget: config.providerInputBudget ?? null"),
+    "the adjudicator must echo the run's serving-budget fact into the evidence");
+  checks.providerInputBudgetThreadedFromDeploymentPinToRegistration = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 24 - every run pins the SSE transport into the worker's isolated settings, so no
+// arm rides WebSocket delta requests whose connection drops re-send the context cold
+// ---------------------------------------------------------------------------
+{
+  assert.equal(EXPERIMENT_TRANSPORT, "sse");
+  assert(EXPERIMENT_TRANSPORTS.includes(EXPERIMENT_TRANSPORT));
+  validateExperimentRunConfig({ ...runConfig, transport: "sse" });
+  validateExperimentRunConfig(runConfig); // pre-pin runs carry no key and still adjudicate
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, transport: "carrier-pigeon" }),
+    /transport is not a known Pi transport/);
+  validateExperimentManifest({ ...manifest, transport: "sse" });
+  assert.throws(() => validateExperimentManifest({ ...manifest, transport: true }),
+    /transport is not a known Pi transport/);
+  assert(supervisor.includes("transport: EXPERIMENT_TRANSPORT"),
+    "the supervisor must pin the experiment transport into every run config");
+  assert(worker.includes("{ transport: config.transport }") &&
+    worker.includes('getTransport() === (config.transport ?? "auto")'),
+  "the worker must pass the pinned transport into the isolated settings and assert it reached the session");
+  assert(adjudicator.includes('transport: config.transport ?? "auto"'),
+    "the adjudicator must echo the run's transport into the evidence");
+  checks.transportPinnedToSseForEveryRun = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 25 - mutation accounting and the mechanism-limited counterfactual come from the
+// runtime's own context event stream, not wire inference: rep 17's wire rule counted 60
+// mutations against 38 actual commits, and its raw pooled share of 0.390 hid a mechanism
+// running at 0.864. Both lenses ship in the evidence, and neither replaces the other.
+// ---------------------------------------------------------------------------
+{
+  const prefix = (ordinal, over) => ({ type: "custom", customType: "pi-fold-context-event",
+    data: { kind: "context.prefix", ordinal, change: "append", divergent_tokens: null,
+      estimated_tokens: 0, cause: "pure-append", request_class: "steady-state", ...over } });
+  const custom = (data) => ({ type: "custom", customType: "pi-fold-context-event", data });
+  const entries = [
+    prefix(1, { estimated_tokens: 100 }),
+    // Pure append: the whole previous projection is a cached prefix.
+    prefix(2, { estimated_tokens: 300, cause: "unattributed" }),
+    // Structural rewrite: a commit and its fold, divergence recorded mid-projection.
+    custom({ kind: "context.commit", ordinal: 3, deferred: false, trigger: "gate" }),
+    custom({ kind: "context.fold", ordinal: 3, fold_id: "fold_1", mark_id: "mark_1" }),
+    prefix(3, { change: "rewrite", divergent_tokens: 120, estimated_tokens: 250,
+      cause: "context.commit,context.fold", request_class: "after-fold" }),
+    // Surface rewrite: no structural cause, the class iteration 7 freezes out.
+    prefix(4, { change: "rewrite", divergent_tokens: 40, estimated_tokens: 260,
+      cause: "unattributed" }),
+    // A deferred commit mutates nothing and is counted apart from real commits.
+    custom({ kind: "context.commit", ordinal: 5, deferred: true, reason: "below-reclaim-floor" }),
+    prefix(5, { estimated_tokens: 400 }),
+    // Non-stream customs are invisible to the metrics.
+    { type: "custom", customType: "pi-fold-active-context-state", data: { kind: "context.prefix" } },
+  ];
+  const metrics = contextEventMetrics(entries);
+  assert.equal(metrics.prefixEvents, 5);
+  assert.equal(metrics.prefixRewrites, 2);
+  assert.equal(metrics.structuralRewrites, 1);
+  assert.equal(metrics.surfaceRewrites, 1);
+  assert.equal(metrics.commits, 1);
+  assert.equal(metrics.commitsDeferred, 1);
+  assert.equal(metrics.folds, 1);
+  assert.equal(metrics.byKind["context.prefix"], 5);
+  // Ideal cached walks the recorded divergences: 0 + 100 + 120 + 40 + 260 of 1,310.
+  assert.equal(metrics.counterfactual.idealCachedTokens, 520);
+  assert.equal(metrics.counterfactual.projectedTokens, 1_310);
+  assert.equal(metrics.counterfactual.pooledCacheShare, 520 / 1_310);
+  assert.equal(metrics.counterfactual.byRequestClass["after-fold"].idealCachedTokens, 120);
+  assert.equal(metrics.counterfactual.byRequestClass["steady-state"].requests, 4);
+  // A recorded divergence beyond the previous projection cannot cache more than existed.
+  const clamped = contextEventMetrics([prefix(1, { estimated_tokens: 100 }),
+    prefix(2, { change: "rewrite", divergent_tokens: 999, estimated_tokens: 150,
+      cause: "unattributed" })]);
+  assert.equal(clamped.counterfactual.idealCachedTokens, 100);
+  assert.equal(contextEventMetrics([]).counterfactual.pooledCacheShare, null);
+  // Older sealed streams did not stamp action-specific request classes on the prefix.
+  // Accepted attempt records still surround the request boundary, so the lens can recover
+  // those classes and join the provider observation without rewriting the artifacts.
+  const usage = (input, cacheRead, cacheWrite) => custom({
+    kind: "context.usage", input_tokens: input, cache_read_tokens: cacheRead,
+    cache_write_tokens: cacheWrite,
+  });
+  const topology = contextEventMetrics([
+    prefix(1, { estimated_tokens: 100 }),
+    usage(100, 0, 0),
+    custom({ kind: "context.attempt", action: "fold", ok: true }),
+    prefix(2, { estimated_tokens: 110 }),
+    usage(10, 80, 20),
+    custom({ kind: "context.attempt", action: "peek", ok: true }),
+    prefix(3, { estimated_tokens: 120 }),
+    usage(20, 90, 10),
+    custom({ kind: "context.attempt", action: "expand", ok: true }),
+    prefix(4, { change: "rewrite", divergent_tokens: 70, estimated_tokens: 150,
+      request_class: "after-message" }),
+    usage(30, 100, 20),
+    custom({ kind: "context.attempt", action: "refold", ok: true }),
+    prefix(5, { change: "rewrite", divergent_tokens: 80, estimated_tokens: 130,
+      request_class: "after-message" }),
+    usage(20, 100, 10),
+  ]);
+  assert.deepEqual(Object.fromEntries(Object.entries(topology.counterfactual.byRequestClass)
+    .map(([requestClass, bucket]) => [requestClass, bucket.requests])), {
+    "steady-state": 1,
+    "after-mark": 1,
+    "after-peek": 1,
+    "after-expand": 1,
+    "after-refold": 1,
+  });
+  assert.equal(topology.structuralRewrites, 2,
+    "expand and refold branch switches were still counted as surface rewrites");
+  assert.equal(topology.observedCache.measuredRequests, 5);
+  assert.equal(topology.observedCache.unmeasuredRequests, 0);
+  assert.deepEqual(topology.observedCache.byRequestClass["after-expand"], {
+    requests: 1,
+    measuredRequests: 1,
+    cacheHits: 1,
+    cacheWriteRequests: 1,
+    cacheWriteReportedRequests: 1,
+    inputFresh: 30,
+    cacheRead: 100,
+    cacheWrite: 20,
+    promptTokens: 150,
+    pooledCacheShare: 100 / 150,
+    pooledCacheWriteShare: 20 / 150,
+  });
+  assert(source("scripts/extract_campaign_metrics.mjs").includes("observedCacheByRequestClass"),
+    "the campaign extract drops the action-specific observed cache table");
+  assert(adjudicator.includes("contextEventMetrics(runEntries)") &&
+    adjudicator.includes("pooledCacheShare: usageSeries.pooledCacheShare") &&
+    adjudicator.includes('headlineMutationMetric: "contextEvents.prefixRewrites"'),
+  "the adjudicator must compute event-stream metrics, echo the pooled wire share, and name the stream as the headline mutation metric");
+  checks.eventStreamMutationsAndCounterfactualAdjudicated = true;
+}
+
+// Ported from the retired soak verifier, which was this primitive's only executable
+// coverage anywhere. verifySourceHashes stays LIVE on the experiment path: the worker
+// checks the attested tree before a run and the supervisor re-checks it after, so a
+// runtime that changed mid-campaign is caught rather than measured. The gate proves the
+// REJECTION, not the happy path: a drifted byte must throw.
+{
+  const scratch = mkdtempSync(join(tmpdir(), "pi-context-source-hashes-"));
+  try {
+    writeFileSync(join(scratch, "source.txt"), "one");
+    const treeBefore = directoryTreeSha256(scratch);
+    verifySourceHashes(scratch, { "source.txt": sha256Text("one") });
+    writeFileSync(join(scratch, "source.txt"), "two");
+    assert.notEqual(directoryTreeSha256(scratch), treeBefore,
+      "a rewritten file left the directory tree hash unmoved");
+    assert.throws(() => verifySourceHashes(scratch, { "source.txt": sha256Text("one") }),
+      /source hash drifted/);
+    checks.sourceHashDriftRejected = true;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GATE 27  The harness identity agrees with the runtime that consumes it
+//
+// pi_fold_identity.mjs writes its entry-type namespace out as a literal so the adjudicator
+// and the graders, which run under plain node with no TypeScript loader, can import it.
+// That literal is a copy of what the runtime's entryTypeNamespace() computes, and a copy
+// is a thing that drifts. Here, where jiti IS available, compute it and compare: if the
+// runtime ever changes the rule, this fails instead of a run sealing entry types no reader
+// looks for.
+// ---------------------------------------------------------------------------
+{
+  const jitiPath = join(PROJECT, "node_modules", "jiti", "lib", "jiti.mjs");
+  assert(existsSync(jitiPath), "could not resolve package-local jiti to check the identity namespace");
+  const { createJiti } = await import(pathToFileURL(jitiPath));
+  const policy = await createJiti(import.meta.url).import(join(PROJECT, "extensions", "lib", "policy.ts"));
+  const identity = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_fold_identity.mjs")));
+  const prefix = identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION.entryTypePrefix;
+  assert.equal(policy.entryTypeNamespace(prefix), identity.PI_FOLD_ENTRY_NAMESPACE,
+    "the identity module's written-out namespace no longer matches entryTypeNamespace()");
+  assert.equal(identity.PI_FOLD_STATE_ENTRY, `${prefix}-state`);
+  assert.equal(identity.PI_FOLD_FOLD_RECORD_ENTRY, `${prefix}-fold-record`);
+  assert.equal(identity.PI_FOLD_NATIVE_COMPACTION_DECISION_ENTRY,
+    `${identity.PI_FOLD_ENTRY_NAMESPACE}-native-compaction-decision`);
+  assert.equal(identity.PI_FOLD_NATIVE_COMPACTION_RECEIPT_ENTRY,
+    `${identity.PI_FOLD_ENTRY_NAMESPACE}-native-compaction-receipt`);
+  // The registration block is identity ONLY. Foldability policy left it on 2026-08-10
+  // when the auto-fold list inverted: the arm folds every completed tool batch unmarked,
+  // exactly as a consumer's does, and a blacklist smuggled in here would make the measured
+  // ladder a harness-only variant of the shipped one.
+  assert(!Object.hasOwn(identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION, "blacklistAutoFoldTools") &&
+    !Object.hasOwn(identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION, "autoFoldableTools"),
+  "the harness identity must carry no auto-fold policy: the arm runs the shipped default");
+  // Nor any brief-generator policy. Which model writes a run's briefs is a RUN fact that
+  // travels the run config and gets sealed into that run's manifest; parked here it would
+  // be invisible to the manifest and identical across every rep by construction.
+  assert(!Object.hasOwn(identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION, "summarizeContextSpan") &&
+    !Object.hasOwn(identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION, "summarizer") &&
+    !Object.hasOwn(identity.PI_FOLD_ACTIVE_CONTEXT_REGISTRATION, "briefGenerator"),
+  "the harness identity must carry no brief-generator policy: that fact belongs to the run");
+  checks.harnessIdentityMatchesRuntimeNamespace = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 28 - tool usage is a reported number, never a hand discovery. The rep-23 run
+// (zero context-tool calls, every fold ladder-origin) was found by manually reading a
+// sealed run. contextEventMetrics must carry per-action outcomes, the zero-call flag,
+// protect no-ops, and committed curation mass by origin with the share reported
+// beside its numerator and denominator.
+// ---------------------------------------------------------------------------
+{
+  const custom = (data) => ({ type: "custom", customType: "pi-fold-context-event", data });
+  const entries = [
+    custom({ kind: "context.attempt", ordinal: 4, action: "fold", ok: true,
+      tool_call_id: "call_1", marks_requested: 2, corrections_applied: 1, error: null }),
+    custom({ kind: "context.attempt", ordinal: 6, action: "fold", ok: false,
+      tool_call_id: "call_2", marks_requested: 1, corrections_applied: 0,
+      error: "No exact source spans matched" }),
+    custom({ kind: "context.attempt", ordinal: 8, action: "protect", ok: true,
+      tool_call_id: "call_3", marks_requested: 0, corrections_applied: 0, error: null }),
+    custom({ kind: "context.pin", ordinal: 8, protect: true, ids: "fold_1",
+      id_count: 1, protected_refs_before: 0, protected_refs_after: 3 }),
+    custom({ kind: "context.pin", ordinal: 9, protect: true, ids: "fold_1",
+      id_count: 1, protected_refs_before: 3, protected_refs_after: 3 }),
+    custom({ kind: "context.commit", ordinal: 10, deferred: false, pending_marks: 2 }),
+    custom({ kind: "context.fold", ordinal: 10, fold_id: "fold_2", origin: "agent",
+      source_chars: 9_000 }),
+    custom({ kind: "context.fold", ordinal: 10, fold_id: "fold_3", origin: "ladder",
+      source_chars: 3_000 }),
+  ];
+  const metrics = contextEventMetrics(entries);
+  assert.equal(metrics.toolUsage.attempts, 3);
+  assert.equal(metrics.toolUsage.zeroContextCalls, false);
+  assert.equal(metrics.toolUsage.errors, 1);
+  assert.equal(metrics.toolUsage.corrected, 1);
+  assert.equal(metrics.toolUsage.byAction.fold.attempts, 2);
+  assert.equal(metrics.toolUsage.byAction.fold.accepted, 1);
+  assert.equal(metrics.toolUsage.byAction.fold.errors, 1);
+  assert.equal(metrics.toolUsage.byAction.fold.corrected, 1);
+  assert.equal(metrics.toolUsage.byAction.fold.marksRequested, 3);
+  assert.equal(metrics.toolUsage.byAction.fold.firstOrdinal, 4);
+  assert.equal(metrics.toolUsage.byAction.fold.lastOrdinal, 6);
+  assert.equal(metrics.toolUsage.byAction.protect.attempts, 1);
+  assert.equal(metrics.toolUsage.protectEvents, 2);
+  assert.equal(metrics.toolUsage.protectNoops, 1);
+  assert.equal(metrics.curationMass.committedFolds, 2);
+  assert.equal(metrics.curationMass.agentFoldedCount, 1);
+  assert.equal(metrics.curationMass.agentFoldedSourceChars, 9_000);
+  assert.equal(metrics.curationMass.ladderFoldedSourceChars, 3_000);
+  assert.equal(metrics.curationMass.agentMarkSourcedShare, 0.75);
+  assert.equal(metrics.curationMass.pendingMarksAtLastCommit, 2);
+  // The empty run raises the flag instead of hiding it.
+  assert.equal(contextEventMetrics([]).toolUsage.zeroContextCalls, true);
+  assert.equal(contextEventMetrics([]).curationMass.agentMarkSourcedShare, null);
+  checks.toolUsageIsAReportedNumber = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 46 - the B1 observability contract: every guidance carrier ships with its
+// adjudicator lens in the same build. The last-call exposure-to-response attribution
+// is a TABLE the adjudicator can read (one row per exposure, joined by exposure_seq,
+// with the round's attempts counted between the two seqs), the threshold-notice log
+// travels with its shares, and per-carrier byte overhead is summed from each carrier
+// event's own chars field.
+// ---------------------------------------------------------------------------
+{
+  const custom = (data) => ({ type: "custom", customType: "pi-fold-context-event", data });
+  const entries = [
+    custom({ kind: "context.notice", seq: 1, ordinal: 2, share: 0.25, occupancy: 0.26,
+      occupancy_tokens: 23_400, budget_tokens: 90_000, max_target: 0.8, chars: 300 }),
+    custom({ kind: "context.lastcall", seq: 2, ordinal: 6, occupancy: 0.89, max_target: 0.8,
+      occupancy_tokens: 80_100, budget_tokens: 90_000, unmarked_stale_spans: 4,
+      unmarked_stale_tokens: 30_000, pending_marks: 2, pending_agent_marks: 0, chars: 900 }),
+    custom({ kind: "context.attempt", seq: 3, ordinal: 7, action: "fold", ok: true,
+      tool_call_id: "call_9", marks_requested: 2, corrections_applied: 0, error: null }),
+    custom({ kind: "context.attempt", seq: 4, ordinal: 7, action: "protect", ok: true,
+      tool_call_id: "call_10", marks_requested: 0, corrections_applied: 0, error: null }),
+    custom({ kind: "context.response", seq: 5, ordinal: 8, exposure_seq: 2, commit_seq: 6,
+      trigger: "band-top", outcome: "responded", responded: true, context_calls: 2,
+      marks_added: 2, protects: 1, unprotects: 0 }),
+    custom({ kind: "context.commit", seq: 6, ordinal: 8, deferred: false, trigger: "band-top" }),
+    custom({ kind: "context.rider", seq: 7, ordinal: 8, epoch: 6, chars: 800 }),
+    // A second exposure nothing ever answered stays visible as an open row.
+    custom({ kind: "context.lastcall", seq: 8, ordinal: 12, occupancy: 0.85, max_target: 0.8,
+      occupancy_tokens: 76_500, budget_tokens: 90_000, unmarked_stale_spans: 1,
+      unmarked_stale_tokens: 5_000, pending_marks: 0, pending_agent_marks: 0, chars: 880 }),
+  ];
+  const carriers = contextEventMetrics(entries).guidanceCarriers;
+  assert.equal(carriers.lastCall.exposures, 2);
+  assert.equal(carriers.lastCall.responses, 1);
+  assert.equal(carriers.lastCall.responded, 1);
+  assert.equal(carriers.lastCall.open, 1);
+  assert.equal(carriers.lastCall.responseRate, 0.5);
+  const row = carriers.lastCall.table[0];
+  assert.equal(row.exposureSeq, 2);
+  assert.equal(row.outcome, "responded");
+  assert.equal(row.commitSeq, 6);
+  assert.equal(row.contextCalls, 2);
+  assert.equal(row.marksAdded, 2);
+  assert.equal(row.protects, 1);
+  assert.equal(row.attemptsInRound, 2);
+  assert.equal(row.attemptActionsInRound.fold, 1);
+  assert.equal(row.attemptActionsInRound.protect, 1);
+  assert.equal(row.unmarkedStaleTokens, 30_000);
+  assert.equal(carriers.lastCall.table[1].outcome, "open");
+  assert.equal(carriers.notices.delivered, 1);
+  assert.equal(carriers.notices.byShare["0.25"], 1);
+  assert.equal(carriers.notices.chars, 300);
+  assert.equal(carriers.carrierBytes.riderChars, 800);
+  assert.equal(carriers.carrierBytes.lastCallChars, 1_780);
+  assert.equal(carriers.carrierBytes.noticeChars, 300);
+  assert.equal(carriers.carrierBytes.totalChars, 2_880);
+  // The empty run reports the lens, not its absence.
+  assert.equal(contextEventMetrics([]).guidanceCarriers.lastCall.exposures, 0);
+  assert.equal(contextEventMetrics([]).guidanceCarriers.lastCall.responseRate, null);
+  // The lens rides into every adjudicated report through contextEventMetrics.
+  assert(adjudicator.includes("contextEventMetrics(runEntries)"),
+    "the adjudicator must compute the guidance-carrier lenses from the event stream");
+  checks.guidanceCarrierLensesAdjudicated = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 47 - the surfacing lens, under the same contract. A carrier without its lens is
+// a carrier nobody can grade, so the slate ships with one row per suggestion joined to
+// the outcome the runtime gave it, and first-hop peek precision is derivable per arm.
+// memex's fold lane accepted at 2.2%; that number travels with the metric because it is
+// the floor this design exists to beat, not a trophy.
+// ---------------------------------------------------------------------------
+{
+  const custom = (data) => ({ type: "custom", customType: "pi-fold-context-event", data });
+  const suggestion = (seq, ordinal, foldId, carrier, chars) => custom({
+    kind: "context.suggestion", seq, ordinal, carrier, fold_id: foldId,
+    content_score: 0.42, brief_score: 0.05, margin: 0.37, content_hit: 0.25, brief_hit: 0.15,
+    divergence_margin: 0.1, slot: 0, slate_size: 1, fold_depth: 0,
+    considered: 12, divergent: 2, suppressed: 1, intent_terms: 9, chars,
+  });
+  const entries = [
+    suggestion(1, 10, "fold_a", "lastcall", 300),
+    custom({ kind: "context.outcome", seq: 2, ordinal: 14, fold_id: "fold_a",
+      from_outcome: "shown", outcome: "acted", outcome_ordinal: 14, window_ordinals: 12 }),
+    custom({ kind: "context.outcome", seq: 3, ordinal: 27, fold_id: "fold_a",
+      from_outcome: "acted", outcome: "used", outcome_ordinal: 27, window_ordinals: 12 }),
+    suggestion(4, 30, "fold_b", "rider", 280),
+    custom({ kind: "context.outcome", seq: 5, ordinal: 43, fold_id: "fold_b",
+      from_outcome: "shown", outcome: "ignored", outcome_ordinal: 43, window_ordinals: 12 }),
+    // Issued late: the run ended inside its window, which is an open row, not a miss.
+    suggestion(6, 50, "fold_c", "lastcall", 290),
+  ];
+  const lens = contextEventMetrics(entries).guidanceCarriers.surfacing;
+  assert.equal(lens.issued, 3);
+  assert.equal(lens.acted, 1);
+  assert.equal(lens.used, 1);
+  assert.equal(lens.ignored, 1);
+  assert.equal(lens.open, 1);
+  assert.equal(lens.firstHopPeekPrecision, 1 / 3);
+  assert.equal(lens.usedRate, 1 / 3);
+  assert.equal(lens.memexFoldLaneAcceptRate, MEMEX_FOLD_LANE_ACCEPT_RATE);
+  assert.equal(lens.beatsMemexFoldLane, true);
+  assert.equal(lens.suppressionTransitions, 3);
+  // Both channel scores, the divergence and the slate position are on every row: this
+  // IS the bandit's training data, and a row that dropped them would be unlearnable.
+  const [first] = lens.table;
+  assert.equal(first.foldId, "fold_a");
+  assert.equal(first.carrier, "lastcall");
+  assert.equal(first.contentScore, 0.42);
+  assert.equal(first.briefScore, 0.05);
+  assert.equal(first.margin, 0.37);
+  assert.equal(first.slot, 0);
+  assert.equal(first.outcome, "used", "the grade must be the offer's TERMINAL outcome");
+  assert.equal(lens.table[2].outcome, "open");
+  assert.equal(lens.byCarrier.lastcall.issued, 2);
+  assert.equal(lens.byCarrier.lastcall.used, 1);
+  assert.equal(lens.byCarrier.rider.ignored, 1);
+  // Per-carrier byte overhead: the slate's bytes are counted, and counted as riding the
+  // carriers rather than as a carrier of their own, because that is what they do.
+  const carrierBytes = contextEventMetrics(entries).guidanceCarriers.carrierBytes;
+  assert.equal(carrierBytes.surfacingChars, 870);
+  assert(carrierBytes.definition.includes("ALREADY INSIDE"));
+  // The empty run reports the lens, not its absence.
+  assert.equal(contextEventMetrics([]).guidanceCarriers.surfacing.issued, 0);
+  assert.equal(contextEventMetrics([]).guidanceCarriers.surfacing.firstHopPeekPrecision, null);
+  assert(adjudicator.includes("contextEventMetrics(runEntries)"),
+    "the adjudicator must compute the surfacing lens from the event stream");
+  checks.surfacingLensAdjudicated = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 29 - the observability capture is threaded end to end: the extension logs
+// bounded arguments on every tool call and logs FAILED context calls as rows rather
+// than anonymous errors, the runtime's attempt records carry the tool_call_id join
+// key, the worker reports pending marks at run end, and the adjudicator joins the two
+// streams by id and surfaces end-of-run curation state.
+// ---------------------------------------------------------------------------
+{
+  assert(extension.includes("argumentsJson: safeArgumentsJson(event.input)"),
+    "the extension no longer logs bounded tool-call arguments");
+  assert(!extension.includes("event.isError !== true"),
+    "the extension still skips failed context calls in the context-tool-result stream");
+  assert(extension.includes("isError: event.isError === true,") &&
+    extension.includes("? toolResultText(event.content ?? event.result?.content ?? null).slice(0, 512)"),
+  "failed context calls must land as rows with bounded error text");
+  const runtime = source("extensions/active-context.ts");
+  assert(runtime.includes("tool_call_id: toolCallId,"),
+    "context.attempt records must carry the tool_call_id join key");
+  assert(worker.includes("pendingAgentMarks: (activeState.pendingMarks ?? [])"),
+    "the worker must report pending agent marks at run end");
+  assert(adjudicator.includes('joinKey: "tool_call_id"') &&
+    adjudicator.includes("emittedWithoutAttempt") &&
+    adjudicator.includes("pendingAgentMarks: workerReport?.foldSummary?.pendingAgentMarks"),
+  "the adjudicator must join model-emitted calls to runtime attempts by id and surface end-of-run state");
+  checks.observabilityThreadedEndToEnd = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 30 - the conversation-recall instrument is threaded end to end: the stager
+// weaves seeded code words and refuses corpus collisions over the WHOLE checkout,
+// probe ids are wave-scoped, the symbol index spans every text file in the tree,
+// the grader forwards the class split, and the adjudicator reports parse rates
+// per class before anyone opens the blind packet.
+// ---------------------------------------------------------------------------
+{
+  // THE CODE WORDS AND THE AUDIT TRACES ARE GONE (2026-08-25), asserted on the staging
+  // source the same way the probe waves are below: a builder that starts emitting either
+  // again fails here rather than in a ten-hour run. They were the last instruments that
+  // could only be written in protocol vocabulary, and sol-20260825-readfull showed what
+  // that cost: 218 "stage", 102 "code word" and 24 "AUDIT TRACE" across 64 instructions,
+  // and a native summary that came back indexed by "Stage NN analyzed ...".
+  assert(!/stageCodeWords|stageCodeWordReissues|codeWordSentence|codeWordReissueSentence/.test(staging),
+    "the stager still reaches for the code word generators or their sentences");
+  assert(!/buildAuditTraces|auditStepSentence|auditStepId/.test(staging),
+    "the stager still reaches for the audit trace builder or its sentences");
+  assert(staging.includes("codeWord: null,") && staging.includes("codeWordReissue: null,") &&
+    staging.includes("chainStep: null,") && staging.includes("const chains = [];"),
+  "the stager must write the code word, reissue, chain step and chain fields empty rather than dropping them");
+  // The collision scan outlives what it was built for: the seeded stale-artifact values are
+  // the one planted set left, and a value the checkout already contains is answerable from
+  // disk exactly as a code word would have been.
+  assert(staging.includes("collectCheckoutDefinitions(checkoutDir, [])"),
+    "planted-word collisions must still be judged over the whole checkout");
+  // THE PROBE WAVES ARE GONE. Asserted on the staging source so a builder that starts
+  // emitting them again fails here rather than in a five-hour run: no probe id is minted,
+  // no wave schedule is read, and the field the readers key off is written empty.
+  assert(!/id: `probe-\$\{/.test(staging),
+    "the stager mints a probe id: the waves are supposed to be deleted");
+  assert(!/probeStages|probeKinds|buildProbes|buildConversationProbes/.test(staging),
+    "the stager still reaches for the probe schedule or its builders");
+  assert(staging.includes("probes: [],"),
+    "the stager must write the probes field empty rather than dropping it");
+  assert(staging.includes("...visibleStage(stage)"),
+    "the stager's payload hash must strip hidden keys through the shared helper");
+  assert(grader.includes('class: "conversation"') && grader.includes('class: "repository"') &&
+    grader.includes("sourceStage: probe.sourceStage"),
+  "the grader must forward the probe class split and the carrier stage");
+  assert(adjudicator.includes("probeClassSummary"),
+    "the adjudicator must report per-class parse rates");
+  // The version bump found its first drift victim: the worker's sealed manifest
+  // carried a literal 1 and died at validation on every arm of the first v2 launch.
+  assert(worker.includes("version: EXPERIMENT_PROTOCOL_VERSION,"),
+    "the worker manifest version must be the protocol constant, never a literal");
+  // The answer pattern accepts the wave-scoped ids the sessions will actually echo.
+  const pattern = probeAnswerPattern("probe-16-01");
+  assert.equal(pattern.exec("probe-16-01: cw-ab12cd")?.[1], "cw-ab12cd");
+  assert.equal(pattern.exec("- probe-16-01 - cw-ab12cd")?.[1], "cw-ab12cd");
+  assert.equal(pattern.exec("probe-16-02: nope"), null);
+  checks.conversationRecallInstrumentThreadedEndToEnd = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 31 - ONE strip helper, FOUR call sites. The supervisor's hand-rolled strip
+// kept only three hidden keys while the other three sites kept four: harmless only
+// because stagePayloadText renders id and question alone. A hidden field added
+// under protocol v3 must be strippable by changing exactly one list.
+// ---------------------------------------------------------------------------
+{
+  assert.deepEqual([...HIDDEN_PROBE_KEYS],
+    ["expectedAnswer", "sourcePath", "sourceLine", "sourceStage"]);
+  const dirty = {
+    ordinal: 5,
+    probes: [{
+      id: "probe-05-01", kind: "stage-fact", question: "q",
+      expectedAnswer: "a", sourcePath: "p", sourceLine: 3, sourceStage: 2,
+    }],
+  };
+  const clean = visibleStage(dirty);
+  assert.deepEqual(clean.probes[0], { id: "probe-05-01", kind: "stage-fact", question: "q" });
+  // The payload gate refuses EVERY hidden key, not only expectedAnswer.
+  for (const key of HIDDEN_PROBE_KEYS) {
+    assert.throws(() => stagePayloadText({
+      ordinal: 5, kind: "probe", instructions: "x", files: [],
+      probes: [{ id: "probe-05-01", kind: "stage-fact", question: "q", [key]: "leak" }],
+    }), /still carries probe ground truth/, `payload gate ignores hidden key ${key}`);
+  }
+  // Every strip site goes through the ONE helper; no hand-rolled destructuring remains.
+  for (const [name, text] of [
+    ["stager", staging], ["supervisor", supervisor],
+    ["lib", source("scripts/lib/pi_context_experiment.mjs")],
+    ["verifier", source("scripts/verify_pi_context_experiment.mjs")],
+  ]) {
+    assert(text.includes("visibleStage("), `${name} does not use the shared strip helper`);
+  }
+  const handRolled = /expectedAnswer:\s*_/;
+  assert(!handRolled.test(staging) && !handRolled.test(supervisor),
+    "a hand-rolled probe strip survives outside the shared helper");
+  checks.oneStripHelperFourCallSites = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 32 - audit hop alphabet and trace construction. ONE evaluator serves the
+// stager and the adjudicator; construction is seeded, deterministic, and obeys
+// the forced cycle, strictly increasing stages, and knowability at every step.
+// ---------------------------------------------------------------------------
+{
+  // The declared counting rule: spaced "#  include" counts, #if blocks count,
+  // angle-bracket includes never count.
+  assert.deepEqual(quotedIncludeSpecs([
+    "#include \"alpha.h\"",
+    "#include <system.h>",
+    "#ifdef GUARD",
+    "  #  include \"beta.h\"",
+    "#endif",
+    "// #include \"comment.h\"",
+  ].join("\n")), ["alpha.h", "beta.h"]);
+  // Resolution: dir-relative first, then unique basename, ambiguity refused.
+  const resolve = buildIncludeResolver([
+    "lib/deep/alpha.h", "lib/alpha.h", "lib/only.h", "src/dupe.h", "lib/dupe.h",
+  ]);
+  assert.equal(resolve("lib/deep/user.c", "alpha.h"), "lib/deep/alpha.h");
+  assert.equal(resolve("src/user.c", "only.h"), "lib/only.h");
+  assert.equal(resolve("lib/x/user.c", "dupe.h"), null);
+  // Synthetic delivery: 6 payload stages of 3 files with an include web dense
+  // enough that seeds have genuine choices to diverge over.
+  const web = new Map();
+  const stages = Array.from({ length: 8 }, (_, index) => {
+    const ordinal = index + 1;
+    if ([4, 8].includes(ordinal)) return { ordinal, kind: "probe", files: [] };
+    const files = ["x", "y", "z"].map((tag) => ({ path: `s${ordinal}/${tag}.c` }));
+    return { ordinal, kind: "read", files };
+  });
+  const paths = stages.flatMap((stage) => stage.files.map((file) => file.path));
+  for (const [position, path] of paths.entries()) {
+    web.set(path, [paths[(position + 2) % paths.length], paths[(position + 5) % paths.length]]);
+  }
+  const includeTargets = (path) => web.get(path) ?? [];
+  const shape = {
+    stages, chainLength: 3, startAfters: [1],
+    earlyLaw: { maxStage: 2, minLinks: 1 }, includeTargets,
+  };
+  const chains = buildAuditTraces({ ...shape, seed: "trace-seed" });
+  assert.equal(chains.length, 1);
+  assert.equal(chains[0].id, AUDIT_TRACE_IDS[0]);
+  assert.deepEqual(chains[0].links.map((link) => link.hop), [...AUDIT_HOP_CYCLE]);
+  let previousStage = 0;
+  for (const [linkIndex, link] of chains[0].links.entries()) {
+    assert(link.stage > previousStage, "step stages must strictly increase");
+    assert(stages[link.stage - 1].kind !== "probe", "steps sit on payload stages only");
+    previousStage = link.stage;
+    // Every answer re-derives through the ONE evaluator.
+    const delivery = {
+      stageOfPath: new Map(stages.flatMap((stage) => stage.files.map((file) => [file.path, stage.ordinal]))),
+      filesOfStage: new Map(stages.map((stage) => [stage.ordinal, stage.files.map((file) => file.path)])),
+    };
+    assert.equal(evaluateAuditHop({
+      hop: link.hop, hopIndex: link.hopIndex, input: link.input, delivery, includeTargets,
+    }), link.expectedAnswer);
+    if (linkIndex > 0) assert.equal(link.input, chains[0].links[linkIndex - 1].expectedAnswer);
+  }
+  // Same seed, same chains; over a seed set, at least one construction differs.
+  assert.deepEqual(buildAuditTraces({ ...shape, seed: "trace-seed" }), chains);
+  const baseline = JSON.stringify(chains);
+  assert(["s-a", "s-b", "s-c", "s-d"].some((seed) =>
+    JSON.stringify(buildAuditTraces({ ...shape, seed })) !== baseline),
+  "audit trace construction ignores its seed");
+  // Evaluator refusals: unknown hops and out-of-range indexes throw, never guess.
+  const delivery = {
+    stageOfPath: new Map([["s1/x.c", 1]]),
+    filesOfStage: new Map([[1, ["s1/x.c"]]]),
+  };
+  assert.throws(() => evaluateAuditHop({ hop: "DEF", hopIndex: 1, input: "s1/x.c", delivery, includeTargets }),
+    /Unknown audit hop/);
+  assert.throws(() => evaluateAuditHop({ hop: "SOF", hopIndex: null, input: "ghost.c", delivery, includeTargets }),
+    /never delivered/);
+  assert.throws(() => evaluateAuditHop({ hop: "FIN", hopIndex: 2, input: 1, delivery, includeTargets }),
+    /needs file 2/);
+  assert.throws(() => evaluateAuditHop({ hop: "INC", hopIndex: 9, input: "s1/x.c", delivery, includeTargets }),
+    /resolvable quoted include/);
+  checks.auditHopEvaluatorSharedSeededAndDeterministic = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 33 - exhaustion refuses, never shortens. A corpus with no include web
+// cannot host a 3-link chain, and an unsatisfiable early law is a refusal too:
+// a variable-length chain would make the wave schedule non-uniform across seeds.
+// ---------------------------------------------------------------------------
+{
+  const stages = Array.from({ length: 8 }, (_, index) => {
+    const ordinal = index + 1;
+    if ([4, 8].includes(ordinal)) return { ordinal, kind: "probe", files: [] };
+    return { ordinal, kind: "read", files: [{ path: `s${ordinal}/only.c` }, { path: `s${ordinal}/more.c` }] };
+  });
+  assert.throws(() => buildAuditTraces({
+    stages, seed: "dry-seed", chainLength: 3, startAfters: [1],
+    earlyLaw: { maxStage: 2, minLinks: 1 }, includeTargets: () => [],
+  }), /unconstructible/);
+  // Early law: no step can ever sit at stage 1, so maxStage 1 must refuse even
+  // though the chain itself is constructible.
+  const paths = stages.flatMap((stage) => stage.files.map((file) => file.path));
+  const web = new Map(paths.map((path, position) => [path, [paths[(position + 3) % paths.length]]]));
+  assert.throws(() => buildAuditTraces({
+    stages, seed: "late-seed", chainLength: 3, startAfters: [1],
+    earlyLaw: { maxStage: 1, minLinks: 1 }, includeTargets: (path) => web.get(path) ?? [],
+  }), /chain links landed/);
+  checks.auditTraceExhaustionRefusesNeverShortens = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 34 - the chain laws bind steps to the plan and reject tamper. The step
+// sentences are pinned literally: they carry the declared counting and
+// resolution rules, and a silent rewording would change the instrument.
+// ---------------------------------------------------------------------------
+{
+  const [sofStep, finStep, incStep] = plan.stages
+    .filter((stage) => stage.chainStep !== null)
+    .map((stage) => stage.chainStep);
+  // BOTH SHIPPED WORDINGS, pinned by value. This function is an archive reader now: the
+  // audit traces are deleted from production, its only caller is the sealed-plan validator,
+  // and that validator asserts a stage's instructions CONTAIN the sentence it reproduces.
+  // bc3889a reworded "delivered" to "assigned" and thereby refused every sealed plan ever
+  // built, which `adjudicate` runs before it grades, so the whole v4 and v5 corpus was
+  // un-adjudicable and the suite passed anyway: it drives a freshly-built fixture, and a
+  // fixture built by the current builder always matches the current wording. That is the
+  // hole. The eras are pinned by value, and the DEFAULT stays the older one because that is
+  // what 17 of the 19 v4+ sealed plans contain.
+  assert.equal(auditStepSentence(sofStep),
+    "AUDIT TRACE trace-a, step 01: which stage of this session delivered the file " +
+    "stage-1.rs? Record it on its own line as `trace-a-01: <stage number>`.");
+  assert.deepEqual(auditStepSentences(sofStep), [
+    "AUDIT TRACE trace-a, step 01: which stage of this session delivered the file " +
+    "stage-1.rs? Record it on its own line as `trace-a-01: <stage number>`.",
+    "AUDIT TRACE trace-a, step 01: which stage of this session assigned the file " +
+    "stage-1.rs? Record it on its own line as `trace-a-01: <stage number>`.",
+  ], "the reader no longer speaks both wordings this harness shipped");
+  assert.deepEqual(auditStepSentences(finStep), [
+    "AUDIT TRACE trace-a, step 02: name the 2nd file delivered in the stage you " +
+    "recorded as trace-a-01, counting files in the order that stage delivered them. " +
+    "Record it on its own line as `trace-a-02: <repository-relative path>`.",
+    "AUDIT TRACE trace-a, step 02: name the 2nd file assigned by the stage you " +
+    "recorded as trace-a-01, counting files in the order that stage listed them. " +
+    "Record it on its own line as `trace-a-02: <repository-relative path>`.",
+  ], "the FIN hop's two wordings drifted");
+  // A plan carrying EITHER era validates, which is the property the corpus needs. Driven by
+  // rewriting the fixture's own instruction into the other era rather than by asserting over
+  // the source, so a reader that stops accepting one fails here.
+  for (const era of [0, 1]) {
+    const swapped = structuredClone(plan);
+    for (const stage of swapped.stages) {
+      if (stage.chainStep === null) continue;
+      const both = auditStepSentences(stage.chainStep);
+      stage.instructions = stage.instructions.replace(both[era === 0 ? 1 : 0], both[era]);
+    }
+    swapped.planSha256 = stagePlanSha256(swapped);
+    validateStagePlan(swapped);
+  }
+  assert.equal(auditStepSentence(incStep),
+    "AUDIT TRACE trace-a, step 03: open the file you recorded as trace-a-02 and name " +
+    "the target of its 1st quoted include. Count every line whose first non-space " +
+    "characters are `#include` (whitespace after `#` allowed) followed by a " +
+    "double-quoted path, in file order, including lines inside `#if` blocks. Give the " +
+    "target repository-relative: resolve it against the including file's directory " +
+    "first, and otherwise as the unique file in the checkout with that basename. " +
+    "Record it on its own line as `trace-a-03: <repository-relative path>`.");
+  // The step answer line parses with the probe parser: no new parser, no new law.
+  assert.equal(probeAnswerPattern("trace-a-02").exec("trace-a-02: stage-1-extra.rs")?.[1],
+    "stage-1-extra.rs");
+  const rehash = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  // A plan that carries chain STEPS and no chains to bind them to is the half-deleted
+  // shape, refused by name; dropping one chain of a sealed set is the count law, and both
+  // must still fire, because "chains are gone" and "chains are wrong" are different faults.
+  const noChains = rehash(structuredClone(plan));
+  noChains.chains = [];
+  assert.throws(() => validateStagePlan(rehash(noChains)),
+    /carries chain steps with no chains to bind them to/);
+  // Smoke mode carries exactly one chain, so the count is broken by ADDING rather than by
+  // slicing: slicing reaches zero and trips the deletion law above instead.
+  const extraChains = rehash(structuredClone(plan));
+  extraChains.chains = [...extraChains.chains, structuredClone(extraChains.chains[0])];
+  assert.throws(() => validateStagePlan(rehash(extraChains)), /chain count disagrees/);
+  const ontoProbe = structuredClone(plan);
+  ontoProbe.chains[0].links[2].stage = 4;
+  assert.throws(() => validateStagePlan(rehash(ontoProbe)), /strictly later payload stage/);
+  const brokenChain = structuredClone(plan);
+  brokenChain.chains[0].links[1].input = 99;
+  assert.throws(() => validateStagePlan(rehash(brokenChain)), /does not consume the previous answer/);
+  const liedSof = structuredClone(plan);
+  liedSof.chains[0].links[0].expectedAnswer = 2;
+  assert.throws(() => validateStagePlan(rehash(liedSof)), /disagrees with the delivery map/);
+  const repeatedNode = structuredClone(plan);
+  repeatedNode.chains[0].links[1].hopIndex = 1;
+  repeatedNode.chains[0].links[1].expectedAnswer = "stage-1.rs";
+  repeatedNode.chains[0].links[2].input = "stage-1.rs";
+  assert.throws(() => validateStagePlan(rehash(repeatedNode)), /repeats node/);
+  const strayStep = structuredClone(plan);
+  strayStep.stages[5].chainStep = { ...strayStep.stages[1].chainStep };
+  assert.throws(() => validateStagePlan(rehash(strayStep)), /no chain claims/);
+  const unwoven = structuredClone(plan);
+  unwoven.stages[1].instructions =
+    unwoven.stages[1].instructions.replace(auditStepSentence(sofStep), "").trim();
+  assert.throws(() => validateStagePlan(rehash(unwoven)), /chain step disagrees/);
+  const leakyRevisit = structuredClone(plan);
+  const revisit = leakyRevisit.stages.find((stage) => stage.kind === "revisit");
+  revisit.instructions += " cross-reference specifically stage 1 (stage-1.rs, stage-1-extra.rs)";
+  assert.throws(() => validateStagePlan(rehash(leakyRevisit)), /names a chain stage node/);
+  checks.auditTraceLawsBindStepsAndRejectTamper = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 35 - step grading, end to end through the ONE evaluator. The self
+// verdict re-runs the hop over the agent's OWN recorded predecessor, so
+// "cannot do the derivation" and "lost the predecessor" separate: an agent that
+// derives correctly from its own wrong value scores self-match on a link whose
+// absolute verdict is a mismatch.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(normalizeTraceAnswer("  `lib/rand.h`. "), "lib/rand.h");
+  assert.equal(normalizeTraceAnswer("\"7\","), "7");
+  assert.equal(normalizeTraceAnswer(null), null);
+  // Presentation forms of the SAME value, which the grader must not read as a
+  // miss (Shane 2026-08-14). Emphasis, a leading ./, and a trailing line
+  // position on a path.
+  assert.equal(normalizeTraceAnswer("**lib/vtls/gtls.h**"), "lib/vtls/gtls.h");
+  assert.equal(normalizeTraceAnswer("_lib/vtls/gtls.h_"), "lib/vtls/gtls.h");
+  assert.equal(normalizeTraceAnswer("./lib/vtls/gtls.h"), "lib/vtls/gtls.h");
+  assert.equal(normalizeTraceAnswer("`lib/vtls/gtls.h:43`"), "lib/vtls/gtls.h");
+  assert.equal(normalizeTraceAnswer("lib/vtls/gtls.h:43:9"), "lib/vtls/gtls.h");
+  // The line-suffix strip is confined to path-shaped values, so a
+  // definition-line answer keeps its digits and a bare identifier is untouched.
+  assert.equal(normalizeTraceAnswer("43"), "43");
+  assert.equal(normalizeTraceAnswer("Curl_gtls_shared_creds_free"), "Curl_gtls_shared_creds_free");
+  // The other direction, which is the property that matters: nothing above may
+  // collapse two DIFFERENT values together. Both are the real mismatches from
+  // the sol-20260814-deployment pifold arm, and both must stay mismatches.
+  assert.notEqual(normalizeTraceAnswer("lib/vtls/gtls.c"), normalizeTraceAnswer("lib/vtls/gtls.h"));
+  assert.notEqual(normalizeTraceAnswer("cw-509a30"), normalizeTraceAnswer("cw-668aac"));
+  assert.notEqual(normalizeTraceAnswer("lib/vtls/gtls.h"), normalizeTraceAnswer("lib/vtls/gtls2.h"));
+  assert.equal(probeClassOf("stage-fact"), "conversation");
+  assert.equal(probeClassOf("chain-link"), "derived");
+  assert.equal(probeClassOf("derivation-control"), "derived");
+  assert.equal(probeClassOf("definition-line"), "repository");
+  const entriesOf = (script) => {
+    const entries = [];
+    let entryId = 0;
+    for (const [text, toolCallId, stage] of script) {
+      entries.push({
+        id: `entry-${String(entryId += 1).padStart(3, "0")}`, type: "message",
+        message: {
+          role: "assistant",
+          content: [
+            ...(text ? [{ type: "text", text }] : []),
+            ...(toolCallId ? [{ type: "toolCall", id: toolCallId, name: "repo_stage", arguments: {} }] : []),
+          ],
+        },
+      });
+      if (stage !== undefined) {
+        entries.push({
+          id: `entry-${String(entryId += 1).padStart(3, "0")}`, type: "message",
+          message: {
+            role: "toolResult", toolName: "repo_stage", toolCallId, isError: false,
+            content: [{ type: "text", text: `STAGE ${stage}` }], details: { stage },
+          },
+        });
+      }
+    }
+    return entries;
+  };
+  // Steps sit at stages 2 (SOF), 3 (FIN) and 5 (INC). The agent records step 1
+  // correctly, mis-copies step 2, then derives step 3 CORRECTLY from its own
+  // wrong step-2 value.
+  const entries = entriesOf([
+    ["", "c1", 1], ["", "c2", 2],
+    ["trace-a-01: `1`.", "c3", 3],
+    ["trace-a-02: stage-1.rs", "c4", 4],
+    ["", "c5", 5],
+    ["notes\ntrace-a-03: stage-9.rs", "c6", 6],
+    ["done"],
+  ]);
+  const transcripts = traceStepTranscripts({ entries, plan });
+  assert.equal(transcripts.length, 1);
+  assert.deepEqual(transcripts[0].steps.map((step) => [step.stepId, step.parsed]),
+    [["trace-a-01", true], ["trace-a-02", true], ["trace-a-03", true]]);
+  const selfWeb = (path) => path === "stage-1.rs" ? ["stage-9.rs"] : [];
+  const verdicts = traceStepVerdicts({ transcripts, plan, includeTargets: selfWeb });
+  assert.deepEqual(verdicts.chains[0].steps.map((step) => [step.verdictAbsolute, step.verdictSelf]), [
+    ["match", "match"],
+    ["mismatch", "mismatch"],
+    ["mismatch", "match"],
+  ]);
+  assert.equal(verdicts.chains[0].integrityPrefix, 1);
+  assert.deepEqual(verdicts.stepCompliance, { parsed: 3, total: 3 });
+  // A pruned worktree reports not-evaluated for INC self, never a guess.
+  const pruned = traceStepVerdicts({ transcripts, plan, includeTargets: () => null });
+  assert.equal(pruned.chains[0].steps[2].verdictSelf, "not-evaluated");
+  // A lost predecessor is its own outcome, distinct from a failed derivation.
+  const skipped = entriesOf([
+    ["", "c1", 1], ["", "c2", 2],
+    ["trace-a-01: 1", "c3", 3],
+    ["", "c4", 4], ["", "c5", 5],
+    ["trace-a-03: stage-9.rs", "c6", 6],
+    ["done"],
+  ]);
+  const skippedVerdicts = traceStepVerdicts({
+    transcripts: traceStepTranscripts({ entries: skipped, plan }), plan, includeTargets: selfWeb,
+  });
+  assert.deepEqual(skippedVerdicts.chains[0].steps.map((step) => step.verdictSelf),
+    ["match", "unanswered", "no-predecessor"]);
+  // A step recorded after its consumer's stage is not a step: the value could
+  // not have informed the chain, so the window closes at the next step's stage.
+  const late = entriesOf([
+    ["", "c1", 1], ["", "c2", 2], ["", "c3", 3],
+    ["trace-a-01: 1"],
+  ]);
+  const lateSteps = traceStepTranscripts({ entries: late, plan }).flatMap((chain) => chain.steps);
+  assert.equal(lateSteps[0].parsed, false);
+  assert.equal(lateSteps[2].delivered, false);
+  // The adjudicator threads the SHARED machinery: same transcripts, same
+  // verdicts, the one evaluator inside them, and the derived class in the
+  // parse-rate summary.
+  assert(adjudicator.includes("traceStepTranscripts({ entries: runEntries, plan, pushDelivered })") &&
+    adjudicator.includes("traceStepVerdicts({ transcripts: auditTranscripts, plan, includeTargets })") &&
+    adjudicator.includes("auditTraces,") &&
+    adjudicator.includes("traceStepTranscriptSha256"),
+  "the adjudicator must grade trace steps through the shared helpers");
+  assert(adjudicator.includes('["conversation", "derived", "echo", "repository"]') &&
+    adjudicator.includes("probeClassOf(answer.kind)"),
+  "the adjudicator must report parse rates for the derived and echo classes");
+  assert(adjudicator.includes("probeMechanicalVerdicts({ plan, transcripts: probes })") &&
+    adjudicator.includes("probeVerdicts,"),
+  "the adjudicator must report the mechanical headline verdicts");
+  assert(source("scripts/lib/pi_context_experiment.mjs")
+    .includes("expectedFromSelf = evaluateAuditHop({"),
+  "the self verdict must re-derive through the ONE exported hop evaluator");
+  checks.traceStepGradingSeparatesDerivationFromRecall = true;
+
+  // Mechanical verdicts are the headline: exact match after the one normalizer,
+  // stage answers numeric, chain-link rows carrying hop and lag, echo excluded.
+  const verdictRows = probeMechanicalVerdicts({
+    plan,
+    transcripts: [{
+      stage: 4,
+      answers: [
+        { probeId: "probe-04-01", kind: "chain-link", answerText: "stage 1", parsed: true },
+        { probeId: "probe-04-02", kind: "stage-fact", answerText: "`cw-000001`", parsed: true },
+        { probeId: "probe-04-03", kind: "definition-line", answerText: null, parsed: false },
+      ],
+    }, {
+      stage: 8,
+      answers: [
+        { probeId: "probe-08-01", kind: "chain-link", answerText: "stage-1.rs", parsed: true },
+        { probeId: "probe-08-02", kind: "echo", answerText: "whatever", parsed: true },
+      ],
+    }],
+  });
+  assert.deepEqual(verdictRows.map((row) => [row.probeId, row.verdict, row.hop, row.lag]), [
+    ["probe-04-01", "match", "SOF", 2],
+    ["probe-04-02", "match", null, null],
+    ["probe-04-03", "unanswered", null, null],
+    ["probe-08-01", "mismatch", "FIN", 5],
+  ]);
+  checks.mechanicalExactMatchIsTheHeadlineVerdict = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 36 IS RETIRED (2026-08-25). It pinned wave selection: chain-link draws spread
+// across chains and ages, echoes restating distinct earlier answers, and the derivation
+// control never riding a chain file. The waves are deleted and so are the three builders
+// it drove. The audit chains themselves are untouched and still measured, one gate over:
+// gate 37 is their anti-leak law, and every step is still graded at record time against
+// truth and against the model's own previous step. Its number stays spent.
+
+// ---------------------------------------------------------------------------
+// GATE 37 - anti-leak: no instruction surface may name a link answer at or
+// after its step stage, nor pair an SOF/FIN link's stage with its path. File
+// bodies are the corpus and are exempt.
+// ---------------------------------------------------------------------------
+{
+  const rehash = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  const named = structuredClone(plan);
+  named.stages[6].instructions += " compare against stage-1-extra.rs";
+  assert.throws(() => validateStagePlan(rehash(named)), /names the answer/);
+  const paired = structuredClone(plan);
+  paired.stages[6].instructions += " cross-check stage 1 alongside stage-1.rs";
+  assert.throws(() => validateStagePlan(rehash(paired)), /pairs trace-a link 1's stage and path/);
+  checks.instructionSurfacesNeverLeakChainAnswers = true;
+
+  // -------------------------------------------------------------------------
+  // GATE 38 - echo grading. Consistency with the agent's OWN earlier answer is
+  // the recall metric, truth sits beside it unsummed, and the money cell is
+  // consistent-and-wrong: reproducing your own error is unfakeable event
+  // recall, while inconsistent-but-right is re-derivation evidence.
+  // -------------------------------------------------------------------------
+  const echoWaves = (priorText, echoText) => [
+    {
+      stage: 4,
+      answers: [{
+        probeId: "probe-04-01", kind: "chain-link",
+        answerText: priorText, parsed: priorText !== null,
+      }],
+    },
+    {
+      stage: 8,
+      answers: [{
+        probeId: "probe-08-02", kind: "echo",
+        answerText: echoText, parsed: echoText !== null,
+      }],
+    },
+  ];
+  const cellOf = (priorText, echoText) => {
+    const [row] = echoVerdicts({ plan, transcripts: echoWaves(priorText, echoText) });
+    return [row.outcome, row.echoConsistent, row.priorCorrect, row.truthMatch];
+  };
+  assert.deepEqual(cellOf("1", "1"), ["consistent", true, true, true]);
+  assert.deepEqual(cellOf("3", "3"), ["consistent", true, false, false],
+    "consistent-and-wrong is the unfakeable event-recall cell");
+  assert.deepEqual(cellOf("3", "1"), ["inconsistent", false, false, true],
+    "inconsistent-but-right is re-derivation, never recall");
+  assert.deepEqual(cellOf(null, "1"), ["unauthored", false, false, true]);
+  assert.deepEqual(cellOf("1", null), ["unanswered", false, true, false]);
+  // A stage-valued target is compared as a STRING for consistency: restating
+  // "stage 1" when the prior said "1" is not verbatim recall.
+  assert.deepEqual(cellOf("1", "stage 1"), ["inconsistent", false, true, true]);
+  // Plan-side echo laws refuse a same-wave target and a smuggled answer.
+  const rehash38 = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  const sameWave = structuredClone(plan);
+  sameWave.stages[7].probes[1].targetProbeId = "probe-08-01";
+  assert.throws(() => validateStagePlan(rehash38(sameWave)),
+    /must target a distinct earlier chain-link probe/);
+  const smuggled = structuredClone(plan);
+  smuggled.stages[7].probes[1].expectedAnswer = "1";
+  assert.throws(() => validateStagePlan(rehash38(smuggled)), /Invalid echo probe shape/);
+  assert(adjudicator.includes("echoVerdicts({ plan, transcripts: probes })") &&
+    adjudicator.includes("echoes,"),
+  "the adjudicator must grade echoes through the shared helper");
+  checks.echoConsistencyGradedBesideTruthNeverSummed = true;
+
+  // -------------------------------------------------------------------------
+  // GATE 39 - provenance from sealed artifacts. hoardCarry reads the compressed
+  // representations symmetrically (fold briefs AND compaction summaries),
+  // selfEcho reads the agent's own messages, producedBy attributes only on
+  // deterministic links with everything else counted unattributed, and result
+  // joins are by toolCallId even when entry order lies.
+  // -------------------------------------------------------------------------
+  const provenanceEntries = [];
+  const provenancePush = (entry) => provenanceEntries.push(entry) - 1;
+  const provenanceAssistant = (text, toolCalls = []) => provenancePush({
+    type: "message",
+    message: {
+      role: "assistant",
+      content: [
+        ...(text ? [{ type: "text", text }] : []),
+        ...toolCalls.map(([id, name, args]) => ({ type: "toolCall", id, name, arguments: args })),
+      ],
+    },
+  });
+  const provenanceResult = (toolCallId, toolName, stage, text) => provenancePush({
+    type: "message",
+    message: {
+      role: "toolResult", toolName, toolCallId, isError: false,
+      content: [{ type: "text", text }],
+      ...(stage === null ? {} : { details: { stage } }),
+    },
+  });
+  for (let ordinal = 1; ordinal <= 3; ordinal += 1) {
+    provenanceAssistant("", [[`c${ordinal}`, "repo_stage", {}]]);
+    provenanceResult(`c${ordinal}`, "repo_stage", ordinal, `STAGE ${ordinal}`);
+  }
+  // Step recordings for links 1 and 2; a fold brief then CARRIES the step-2
+  // value and the stage-1 code word forward, and a note re-authors the value.
+  provenanceAssistant("trace-a-01: 1");
+  provenanceAssistant("trace-a-02: stage-1-extra.rs");
+  provenancePush({
+    type: "custom", customType: "acme-fold-record",
+    data: { fold: { brief: "folded span: cw-000001 and stage-1-extra.rs live here" } },
+  });
+  provenancePush({ type: "compaction", summary: "history condensed; nothing verbatim" });
+  provenanceAssistant("note to self: stage-1-extra.rs matters");
+  provenanceAssistant("", [["c4", "repo_stage", {}]]);
+  provenanceResult("c4", "repo_stage", 4, "STAGE 4");
+  // Recovery calls in the wave-4 window: a peek whose RESULT carries the
+  // stage-fact answer, and a read of an unrelated path. The peek result is
+  // written BEFORE the call entry to prove the join is by id, never by order.
+  provenanceResult("c-peek", "pi_fold_context", null, "peeked span says cw-000001");
+  provenanceAssistant("", [["c-peek", "pi_fold_context", { action: "peek" }]]);
+  provenanceAssistant("", [["c-read", "read", { path: "unrelated.rs" }]]);
+  provenanceResult("c-read", "read", null, "bytes of unrelated.rs");
+  provenanceAssistant("probe-04-01: 1\nprobe-04-02: cw-000001\nprobe-04-03: unknown");
+  const provenanceProbes = probeTranscripts({ entries: provenanceEntries, plan });
+  const provenanceSteps = traceStepTranscripts({ entries: provenanceEntries, plan });
+  const provenanceReport = probeProvenance({
+    entries: provenanceEntries, plan, probes: provenanceProbes, steps: provenanceSteps,
+  });
+  const rowOf = (probeId) => provenanceReport.rows.find((row) => row.probeId === probeId);
+  // chain-link probe-04-01: SOF answer "1" is numeric, so never scanned.
+  assert.deepEqual(
+    [rowOf("probe-04-01").scannable, rowOf("probe-04-01").hoardCarry, rowOf("probe-04-01").selfEcho],
+    [false, null, null]);
+  // stage-fact probe-04-02: the code word rode the fold brief (hoardCarry) but
+  // was never re-authored by the agent (no selfEcho), and the answer is
+  // attributed to the peek whose result contained it, joined by toolCallId.
+  assert.deepEqual(
+    [rowOf("probe-04-02").hoardCarry, rowOf("probe-04-02").selfEcho, rowOf("probe-04-02").producedBy],
+    [true, false, "recovered"]);
+  // repo probe-04-03: declined outranks every other attribution.
+  assert.equal(rowOf("probe-04-03").producedBy, "declined");
+  assert.deepEqual(provenanceReport.carriers.map((carrier) => carrier.kind),
+    ["fold-brief", "compaction-summary"]);
+  assert.equal(provenanceReport.waves[0].reads, 1);
+  assert.equal(provenanceReport.waves[0].contextCalls, 1);
+  // The step-2 value was hoard-carried AND self-echoed before any probe asked
+  // for it: prove both detectors against the wave-8 chain-link probe by
+  // extending the same session to wave 8 with an in-context answer.
+  for (let ordinal = 5; ordinal <= 8; ordinal += 1) {
+    provenanceAssistant("", [[`c${ordinal}`, "repo_stage", {}]]);
+    provenanceResult(`c${ordinal}`, "repo_stage", ordinal, `STAGE ${ordinal}`);
+  }
+  provenanceAssistant("probe-08-01: stage-1-extra.rs\nprobe-08-02: 1\nprobe-08-03: stage-3.rs\nprobe-08-04: whatever");
+  const extendedReport = probeProvenance({
+    entries: provenanceEntries, plan,
+    probes: probeTranscripts({ entries: provenanceEntries, plan }),
+    steps: traceStepTranscripts({ entries: provenanceEntries, plan }),
+  });
+  const chainRow = extendedReport.rows.find((row) => row.probeId === "probe-08-01");
+  assert.deepEqual(
+    [chainRow.hoardCarry, chainRow.selfEcho, chainRow.producedBy],
+    [true, true, "in-context"]);
+  assert(extendedReport.rows.every((row) => row.kind !== "echo"),
+    "echo probes have no provenance rows: their grading is consistency");
+  assert(adjudicator.includes("probeProvenance({") && adjudicator.includes("provenance,"),
+    "the adjudicator must report provenance from the shared helper");
+  checks.provenanceAttributesOnlyOnDeterministicLinks = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 40 - closed-book floor session: the question list is every non-echo probe
+// in wave order, the prompt is deterministic plan-derived bytes that never carry
+// a session-event answer, the closed-book manifest round-trips its type while an
+// arm manifest without one still validates, and a closed-book transcript grades
+// through the SAME probeMechanicalVerdicts.
+// ---------------------------------------------------------------------------
+{
+  assert.deepEqual([...EXPERIMENT_SESSION_TYPES], ["arm", EXPERIMENT_CLOSED_BOOK_LABEL]);
+  const questions = closedBookQuestions(plan);
+  const nonEcho = plan.stages.flatMap((stage) =>
+    stage.probes.filter((probe) => probe.kind !== "echo"));
+  assert.deepEqual(questions.map((q) => q.id), nonEcho.map((probe) => probe.id),
+    "closed-book questions are every non-echo probe in wave order");
+  const prompt = closedBookPrompt(plan);
+  assert.equal(prompt, closedBookPrompt(plan), "closed-book prompt bytes are deterministic");
+  assert(closedBookSystemPrompt().length > 0);
+  for (const q of questions) {
+    assert(prompt.includes(`- ${q.id}: ${q.question}`), `closed-book prompt carries ${q.id}`);
+  }
+  assert(!prompt.includes("probe-08-02"), "echo questions never reach the closed-book prompt");
+  // Session-event answers (code words, delivery order, chain values) must not be
+  // derivable from the prompt itself: no conversation-class or chain-link expected
+  // answer may appear anywhere in its bytes.
+  for (const probe of nonEcho) {
+    if (!["chain-link", "stage-fact", "stage-binding"].includes(probe.kind)) continue;
+    if (typeof probe.expectedAnswer !== "string" || probe.expectedAnswer.length < 6) continue;
+    assert(!prompt.includes(probe.expectedAnswer),
+      `closed-book prompt leaks the answer to ${probe.id}`);
+  }
+
+  const closedManifest = {
+    version: EXPERIMENT_PROTOCOL_VERSION,
+    runId: "2026-08-09T00-00-00Z-closed-book-rep1-abcd1234",
+    campaignId: "campaign-1",
+    sessionType: EXPERIMENT_CLOSED_BOOK_LABEL,
+    arm: EXPERIMENT_CLOSED_BOOK_LABEL,
+    mode: "smoke",
+    ordinal: 1,
+    repetition: 1,
+    seed: "0011223344556677",
+    model: manifest.model,
+    runtime: { ...manifest.runtime, activeContextEnabled: false, nativeCompactionEnabled: false },
+    target: { repoKey: repo.key, url: repo.url, commit: repo.commit, treeSha256: "1".repeat(64) },
+    plan: manifest.plan,
+    questionsSha256: sha256Json(questions),
+    createdWallMs: 1_800_000_000_000,
+  };
+  validateExperimentManifest(closedManifest);
+  assert.throws(() => validateExperimentManifest({ ...closedManifest, arm: "pifold" }),
+    /closed-book label/);
+  assert.throws(() => validateExperimentManifest({ ...closedManifest, foldScheduling: "immediate" }),
+    /closed-book manifest shape/i);
+  assert.throws(() => validateExperimentManifest((({ questionsSha256: _q, ...rest }) => rest)(closedManifest)),
+    /closed-book manifest shape|question-list hash/i);
+  assert.throws(() => validateExperimentManifest({
+    ...closedManifest, runtime: { ...closedManifest.runtime, activeContextEnabled: true },
+  }), /claims a managed runtime/);
+  assert.throws(() => validateExperimentManifest({
+    ...closedManifest,
+    target: { ...closedManifest.target, checkoutSha256: "1".repeat(64) },
+  }), /target pin/);
+  // Back-compat is the law, not luck: an arm manifest without a session type and one
+  // stating "arm" explicitly both validate; an arm manifest may never claim the type.
+  validateExperimentManifest(manifest);
+  validateExperimentManifest({ ...manifest, sessionType: "arm" });
+  assert.throws(() => validateExperimentManifest({ ...manifest, sessionType: "floor" }),
+    /foreign session type/);
+
+  const closedRunConfig = (({ guidance: _g, ledgerTasks: _l, querySeed: _q, ...rest }) => rest)({
+    ...runConfig, sessionType: EXPERIMENT_CLOSED_BOOK_LABEL, arm: EXPERIMENT_CLOSED_BOOK_LABEL,
+  });
+  validateExperimentRunConfig(closedRunConfig);
+  assert.throws(() => validateExperimentRunConfig({ ...closedRunConfig, arm: "native" }),
+    /arm is invalid/);
+  assert.throws(() => validateExperimentRunConfig({ ...closedRunConfig, foldScheduling: "immediate" }),
+    /no referent/);
+
+  const entries = [
+    { type: "message", message: { role: "user", content: prompt } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text:
+      "probe-04-01: 1\nprobe-04-02: not-the-word\nprobe-08-01: stage-1-extra.rs" }] } },
+  ];
+  const transcripts = closedBookTranscript({ entries, plan });
+  assert(transcripts.flatMap((wave) => wave.answers).every((answer) => answer.kind !== "echo"),
+    "closed-book transcripts never carry echo rows");
+  const verdicts = probeMechanicalVerdicts({ plan, transcripts });
+  const byId = new Map(verdicts.map((row) => [row.probeId, row.verdict]));
+  assert.equal(byId.get("probe-04-01"), "match");
+  assert.equal(byId.get("probe-04-02"), "mismatch");
+  assert.equal(byId.get("probe-08-01"), "match");
+  assert.equal(byId.get("probe-08-03"), "unanswered");
+  assert(!byId.has("probe-08-02"), "echo probes never reach closed-book verdicts");
+  checks.closedBookFloorGradesThroughTheSameVerdicts = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 48 - the rollback observability contract: the event kind ships with its
+// adjudicator lens in the same build. Recovery FREQUENCY is one number and recovery
+// COST is another, and neither is readable without joining the two records that make
+// one episode: context.rollback is what left the branch, context.recovery is what the
+// retried pass folded to make the shorter window fit. The join is by rollback_seq,
+// never by order or clock, and an episode missing its fold-side half is reported
+// rather than dropped, because that is what a retried request aborted before the
+// projection budget leaves behind.
+// ---------------------------------------------------------------------------
+{
+  const custom = (data) => ({ type: "custom", customType: "pi-fold-context-event", data });
+  const entries = [
+    // A recovered episode: rolled back, replayed, and folded down inside the budget.
+    custom({ kind: "context.rollback", seq: 10, ordinal: 40, trigger: "session_before_compact",
+      armed: true, disarm_reason: null, error_entry_id: "entry-a", old_leaf_id: "entry-a",
+      new_leaf_id: "entry-parent", entries_abandoned: 1, occupancy_tokens_before: 49_700,
+      tokens_rolled_back: 42, replayed: true, replay_skip_reason: null, notice_chars: 404,
+      attempt_ordinal: 1, probes_passed: true }),
+    // The ordinary commit of the retried pass did the folding, so the recovery loop's own
+    // delta is zero and the episode's real cost is the freed count against the request
+    // the provider refused. A lens reading the delta alone would price this rescue at 0.
+    custom({ kind: "context.recovery", seq: 11, ordinal: 40, provider_status: 400, attempts: 1,
+      tokens_before: 40_000, tokens_after: 40_000, budget_tokens: 50_400,
+      margin_tokens: 2_520, recovered: true, rejected_tokens: 51_000, freed_tokens: 11_000,
+      loop_reduced: false, rollback_seq: 10 }),
+    // An unreplayable tail: the rollback still happened, the retry did not.
+    custom({ kind: "context.rollback", seq: 20, ordinal: 55, trigger: "session_before_compact",
+      armed: true, disarm_reason: null, error_entry_id: "entry-b", old_leaf_id: "entry-b",
+      new_leaf_id: "entry-c", entries_abandoned: 2, occupancy_tokens_before: 52_000,
+      tokens_rolled_back: 90, replayed: false,
+      replay_skip_reason: "the rolled-back tail leaves 1 tool call(s) unanswered",
+      notice_chars: 460, attempt_ordinal: 2, probes_passed: true }),
+    custom({ kind: "context.recovery", seq: 21, ordinal: 55, provider_status: 400, attempts: 2,
+      tokens_before: 52_000, tokens_after: 52_000, budget_tokens: 50_400,
+      margin_tokens: 2_520, recovered: false, rejected_tokens: 52_000, freed_tokens: 0,
+      loop_reduced: false, rollback_seq: 20 }),
+    // A disarmed lane: nothing silent, and it never counts as a recovery.
+    custom({ kind: "context.rollback", seq: 30, ordinal: 61, trigger: "message_end",
+      armed: false, disarm_reason: "sessionManager.branch is missing", error_entry_id: null,
+      old_leaf_id: null, new_leaf_id: null, entries_abandoned: 0, occupancy_tokens_before: 48_000,
+      tokens_rolled_back: 0, replayed: false, replay_skip_reason: "lane-disarmed",
+      notice_chars: 0, attempt_ordinal: 3, probes_passed: false }),
+  ];
+  const lens = contextEventMetrics(entries).rollback;
+  assert.equal(lens.rollbacks, 3);
+  assert.equal(lens.armed, 2);
+  assert.equal(lens.disarmed, 1);
+  assert.equal(lens.replayed, 1);
+  assert.equal(lens.replayedShare, 0.5, "the replayed rate is measured over ARMED episodes only");
+  assert.equal(lens.entriesAbandoned, 3);
+  assert.equal(lens.tokensRolledBack, 132);
+  assert.equal(lens.noticeChars, 404,
+    "a skipped replay sends its notice to the user, so it is not window overhead");
+  assert.equal(lens.byTrigger.session_before_compact, 2);
+  assert.equal(lens.byTrigger.message_end, 1);
+  assert.equal(lens.replaySkipReasons["lane-disarmed"], 1);
+  assert.equal(Object.keys(lens.replaySkipReasons).length, 2);
+  // The join, and the cost it makes readable.
+  assert.equal(lens.join.joinKey, "rollback_seq");
+  assert.equal(lens.join.recoveryRecords, 2);
+  assert.equal(lens.join.joinedEpisodes, 2);
+  assert.equal(lens.join.rollbacksWithoutRecovery, 1);
+  assert.equal(lens.join.recoveriesWithoutRollback, 0);
+  // RECOVERY COST IS MEASURED AGAINST THE REQUEST THAT WAS REFUSED, not against the
+  // projection the recovery loop happened to start from. Both episodes here have a
+  // loop-local delta of zero; only the freed count separates the rescue from the
+  // unchanged request, and the cost number has to come from the same place the verdict
+  // does or the two disagree on the same episode.
+  assert.equal(lens.foldedTokensToRecover, 11_000);
+  assert.equal(lens.unrecovered, 1);
+  const first = lens.table[0];
+  assert.equal(first.seq, 10);
+  assert.equal(first.recoverySeq, 11);
+  assert.equal(first.recovered, true);
+  assert.equal(first.recoveredTokensBefore, 40_000);
+  assert.equal(first.recoveredTokensAfter, 40_000);
+  assert.equal(first.rejectedTokens, 51_000);
+  assert.equal(first.recoveredFreedTokens, 11_000);
+  assert.equal(lens.table[1].recoveredFreedTokens, 0,
+    "an unchanged request cost nothing to not recover");
+  // A stream from before the freed count exists still prices its episodes, from the only
+  // number it carries.
+  const legacy = contextEventMetrics([
+    custom({ kind: "context.rollback", seq: 40, ordinal: 70, trigger: "session_before_compact",
+      armed: true, disarm_reason: null, error_entry_id: "entry-d", old_leaf_id: "entry-d",
+      new_leaf_id: "entry-e", entries_abandoned: 1, occupancy_tokens_before: 49_000,
+      tokens_rolled_back: 40, replayed: true, replay_skip_reason: null, notice_chars: 400,
+      attempt_ordinal: 1, probes_passed: true }),
+    custom({ kind: "context.recovery", seq: 41, ordinal: 70, provider_status: 400, attempts: 1,
+      tokens_before: 51_000, tokens_after: 40_000, budget_tokens: 50_400,
+      margin_tokens: 2_520, recovered: true, rollback_seq: 40 }),
+  ]).rollback;
+  assert.equal(legacy.foldedTokensToRecover, 11_000, "a pre-freed-count stream lost its cost");
+  assert.equal(legacy.table[0].recoveredFreedTokens, null);
+  assert.equal(lens.table[2].recoverySeq, null, "a disarmed episode has no fold-side half");
+  assert.equal(lens.table[2].disarmReason, "sessionManager.branch is missing");
+  // A recovery with no rollback is a rejection recorded without a tree move, and it is
+  // counted rather than silently joined to nothing.
+  const orphan = contextEventMetrics([
+    custom({ kind: "context.recovery", seq: 1, ordinal: 3, attempts: 1, tokens_before: 10,
+      tokens_after: 5, recovered: true, rollback_seq: null }),
+  ]).rollback;
+  assert.equal(orphan.rollbacks, 0);
+  assert.equal(orphan.join.recoveriesWithoutRollback, 1);
+  // The empty run reports the lens, not its absence.
+  assert.equal(contextEventMetrics([]).rollback.rollbacks, 0);
+  assert.equal(contextEventMetrics([]).rollback.replayedShare, null);
+  // The lens rides into every adjudicated report through contextEventMetrics.
+  assert(adjudicator.includes("contextEventMetrics(runEntries)"),
+    "the adjudicator must compute the rollback lens from the event stream");
+  checks.rollbackLensAdjudicated = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 49 - a native compaction is recorded by OUTCOME, not by the hook firing. The
+// pifold arm runs with pi's compaction ENABLED, because the runtime's overflow recovery
+// lane arms off `session_before_compact`; there a fire is expected traffic, since the
+// runtime cancels a threshold pass and converts an overflow pass into a tree rollback.
+// What no arm but the native one may produce is a COMPLETED compaction, a summary that
+// replaced the transcript. So: every pass is an event everywhere; a pass opens a
+// stop-the-world record only where it runs to a summary; a pass latches on its own only
+// where compaction is switched off and the hook therefore cannot fire legitimately; a
+// completion latches everywhere except the arm whose datum it is. Driven through the real
+// extension, on a real run directory, so the ledgers are the ones a run would seal.
+// ---------------------------------------------------------------------------
+{
+  assert.deepEqual(nativeCompactionDisposition("pifold"),
+    { latchOnPass: false, stopsTheWorld: false, latchOnCompletion: true });
+  assert.deepEqual(nativeCompactionDisposition("native"),
+    { latchOnPass: false, stopsTheWorld: true, latchOnCompletion: false });
+  assert.deepEqual(nativeCompactionDisposition("unmanaged"),
+    { latchOnPass: true, stopsTheWorld: false, latchOnCompletion: true });
+  assert.throws(() => nativeCompactionDisposition("hybrid"), /Unknown arm/);
+
+  const jitiPath = join(PROJECT, "node_modules", "jiti", "lib", "jiti.mjs");
+  assert(existsSync(jitiPath), "could not resolve package-local jiti to drive the experiment extension");
+  // The stage tool's parameter schema comes from typebox, which the harness gets from the
+  // pi install the same way the worker resolves it. Resolving it here and not by luck means
+  // a pi that moved the module fails this gate instead of a launched campaign.
+  const typeboxPath = join(PI_INSTALL_ROOT, "node_modules", "typebox", "build", "index.mjs");
+  assert(existsSync(typeboxPath), `the pi install does not carry typebox at ${typeboxPath}`);
+  const { createJiti } = await import(pathToFileURL(jitiPath));
+  const { createPiContextExperimentExtension } = await createJiti(import.meta.url, {
+    alias: { typebox: typeboxPath },
+  }).import(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"));
+
+  const readLedger = (runDir, name) => {
+    const path = join(runDir, name);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  };
+  // One pass, then optionally the completion, then shutdown so a stop-the-world record that
+  // never saw another productive request is still flushed. Only the extension's own handler
+  // is called: the runtime registers its own on the same events, and its cancel is what a
+  // live pifold session would return, which is exactly the outcome being modelled here.
+  const drive = (arm, { complete = false, branch = [] } = {}) => {
+    const runDir = mkdtempSync(join(tmpdir(), `pi-fold-compaction-${arm}-`));
+    useRunChannelDirectory(runDir);
+    const handlers = new Map();
+    const pi = {
+      on(name, handler) {
+        if (!handlers.has(name)) handlers.set(name, []);
+        handlers.get(name).push(handler);
+      },
+      registerTool() {},
+      registerCommand() {},
+      sendMessage() {},
+      async appendEntry() {},
+    };
+    createPiContextExperimentExtension({
+      version: EXPERIMENT_PROTOCOL_VERSION,
+      runId: `compaction-${arm}`,
+      runDir,
+      campaignId: "gate-49",
+      arm,
+      mode: "smoke",
+      firstChallenge: "a".repeat(64),
+      stageCount: EXPERIMENT_MODE_PLANS.smoke.stageCount,
+      watchdogMs: EXPERIMENT_MODE_PLANS.smoke.watchdogMs,
+    }).factory(pi);
+    // The extension registers both compaction handlers at the TOP of its factory, before it
+    // registers the runtime, and its own context projection handler after it. So the
+    // experiment's compaction handler is first on its event and its context handler is last
+    // on that one. The counts are pinned: a reordering that would send these events to the
+    // runtime's handler instead fails here rather than silently measuring nothing.
+    const registered = (name, expected) => {
+      const list = handlers.get(name) ?? [];
+      assert.equal(list.length, expected,
+        `the ${name} registration shape changed; this gate would drive the wrong handler`);
+      return list;
+    };
+    const runtimeShares = arm === "pifold" ? 2 : 1;
+    registered("session_before_compact", runtimeShares)[0]({ reason: "threshold", willRetry: false });
+    if (complete) {
+      registered("session_compact", runtimeShares)[0]({
+        reason: "threshold", willRetry: false, fromExtension: false,
+        compactionEntry: { id: "compaction-entry-1" },
+      });
+    }
+    if (branch.length > 0) {
+      registered("context", runtimeShares).at(-1)({ messages: [] }, {
+        signal: { aborted: false },
+        sessionManager: { getBranch: () => branch, getLeafId: () => "leaf-1" },
+      });
+    }
+    registered("session_shutdown", runtimeShares).at(-1)({ reason: "quit" });
+    const result = {
+      events: readLedger(runDir, "worker-events.jsonl"),
+      failures: readLedger(runDir, "failure-latch.jsonl"),
+      stops: readLedger(runDir, "stop-the-world.jsonl"),
+    };
+    rmSync(runDir, { recursive: true, force: true });
+    return result;
+  };
+
+  // pifold: the fire is recorded and nothing else happens. No latch, no pause.
+  const pifoldPass = drive("pifold");
+  assert.deepEqual(pifoldPass.events.filter((event) => event.kind === "native-compaction-pass")
+    .map((event) => event.details.reason), ["threshold"]);
+  assert.equal(pifoldPass.failures.length, 0, "a cancelled pass is not a defect in the pifold arm");
+  assert.equal(pifoldPass.stops.length, 0, "a cancelled pass stops no world");
+  // pifold: a compaction that COMPLETED is the defect, and it says so by that name.
+  const pifoldCompletion = drive("pifold", { complete: true });
+  assert.deepEqual(pifoldCompletion.events.map((event) => event.kind).filter((kind) =>
+    kind.startsWith("native-compaction")), ["native-compaction-pass", "native-compaction"]);
+  assert.deepEqual(pifoldCompletion.failures.map((failure) => failure.phase),
+    ["unexpected-native-compaction"]);
+  assert.equal(pifoldCompletion.stops.length, 0);
+  // native: the pass runs to a summary, so it pauses the run and latches nothing.
+  const nativeCompletion = drive("native", { complete: true });
+  assert.equal(nativeCompletion.failures.length, 0, "the native arm's compaction is its datum");
+  assert.deepEqual(nativeCompletion.stops.map((record) => record.kind), ["native-compaction"]);
+  assert.equal(nativeCompletion.stops[0].timeToFirstProductiveRequestMs, null,
+    "an event that never saw another productive request records a null duration, not a made-up one");
+  // unmanaged: compaction is switched off, so the fire alone is the defect.
+  const unmanagedPass = drive("unmanaged");
+  assert.deepEqual(unmanagedPass.failures.map((failure) => failure.phase),
+    ["unexpected-native-compaction"]);
+  assert.equal(unmanagedPass.stops.length, 0);
+  // The branch is the second witness, and it carries the same outcome rule: the runtime
+  // writes its decision and receipt entries from its own completion handler, so any of the
+  // three entry types on the branch means a compaction finished.
+  const compactionEntry = [{ type: "compaction", id: "compaction-entry-1" }];
+  assert.deepEqual(drive("pifold", { branch: compactionEntry }).failures.map((failure) => failure.phase),
+    ["unexpected-native-entry"]);
+  assert.equal(drive("native", { branch: compactionEntry }).failures.length, 0);
+  // The adjudicator judges the sealed run by the same rule, from the same helper.
+  assert(adjudicator.includes("nativeCompactionDisposition(config.arm).latchOnCompletion"),
+    "the adjudicator must derive its native-compaction invariant from the shared disposition");
+  checks.nativeCompactionIsJudgedByOutcome = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 50 - fold briefs are MODEL-WRITTEN on the arm that folds, and the run says which
+// model wrote them. The package writes briefs with a model and keeps the deterministic
+// brief as the automatic failure fallback; the pifold arm registered the runtime with no
+// generator wired, so every sealed run briefed deterministically and no artifact said so.
+// The descriptor now travels config -> manifest -> registration exactly as the serving
+// budget does, the adjudicator echoes it, and the per-fold provenance counts beside it say
+// what the run actually got, so a rep that quietly fell back to the fallback is visible.
+//
+// Those counts are read at the END of the run (Shane 2026-08-11). A ladder fold commits
+// with a deterministic brief and is upgraded to a model brief at a later commit boundary,
+// and the fold record is immutable, so the creation-time count this gate used to pin
+// reported the fallback for folds that finished the run model-briefed, potentially every
+// one of them. The lens joins fold ids to the `brief_upgrade_ids` the commit records
+// carry, and the second half of this gate pins that join.
+// ---------------------------------------------------------------------------
+{
+  // The campaign pin is GONE (Shane 2026-08-14): the pifold arm runs with no
+  // generator, measuring the condition both external reviews recommend making
+  // permanent before any deletion of the upgrade lane. The descriptor VALIDATION
+  // laws stay, because sealed runs carry descriptors and must keep reading; the
+  // fixture descriptor below is a literal so this gate cannot depend on a pin
+  // that no longer exists.
+  const EXPERIMENT_BRIEF_GENERATOR = Object.freeze({
+    provider: "openai-codex", model: "gpt-5.6-terra", effort: "medium",
+  });
+
+  // Only the arm that registers the runtime writes briefs, so only it may carry a
+  // generator: on any other arm the descriptor would be a fact about nothing.
+  validateExperimentRunConfig({ ...runConfig, arm: "pifold", briefGenerator: EXPERIMENT_BRIEF_GENERATOR });
+  validateExperimentRunConfig(runConfig); // runs sealed before the descriptor existed
+  for (const arm of ["native", "unmanaged"]) {
+    assert.throws(() => validateExperimentRunConfig({
+      ...runConfig, arm, briefGenerator: EXPERIMENT_BRIEF_GENERATOR,
+    }), /carries a brief generator but registers no runtime/);
+  }
+  assert.throws(() => validateExperimentRunConfig({
+    ...runConfig, arm: "closed-book", sessionType: "closed-book",
+    briefGenerator: EXPERIMENT_BRIEF_GENERATOR,
+  }), /arm-condition keys with no referent/);
+  for (const malformed of [
+    "session",
+    { provider: "openai", model: "gpt-5.6-luna" },
+    { provider: "openai", model: "gpt-5.6-luna", effort: "" },
+    { provider: "openai", model: "gpt-5.6-luna", effort: "medium", temperature: 0 },
+  ]) {
+    assert.throws(() => validateExperimentRunConfig({
+      ...runConfig, arm: "pifold", briefGenerator: malformed,
+    }), /brief generator is not a provider\/model\/effort descriptor/, JSON.stringify(malformed));
+  }
+  validateExperimentManifest({ ...manifest, briefGenerator: EXPERIMENT_BRIEF_GENERATOR });
+  validateExperimentManifest(manifest);
+  assert.throws(() => validateExperimentManifest({
+    ...manifest,
+    arm: "native",
+    runtime: {
+      ...manifest.runtime,
+      activeContextEnabled: armRuntimeConfiguration("native").activeContextEnabled,
+      nativeCompactionEnabled: armRuntimeConfiguration("native").nativeCompactionEnabled,
+    },
+    briefGenerator: EXPERIMENT_BRIEF_GENERATOR,
+  }), /claims a brief generator but registers no runtime/);
+  assert.throws(() => validateExperimentManifest({
+    ...manifest, briefGenerator: { provider: "openai" },
+  }), /brief generator is not a provider\/model\/effort descriptor/);
+
+  assert(!supervisor.includes("briefGenerator: EXPERIMENT_BRIEF_GENERATOR"),
+    "the supervisor still pins a campaign generator, so the no-generator condition never runs");
+  assert(!/EXPERIMENT_BRIEF_GENERATOR,/.test(supervisor),
+    "the supervisor still imports the retired generator pin");
+  // The generator is DELETED from the package (2026-08-14). No new manifest may carry
+  // the field, so the worker no longer seals it, and the extension refuses a config
+  // that still asks; the adjudicator keeps echoing what sealed runs recorded.
+  assert(!worker.includes("briefGenerator: config.briefGenerator }"),
+    "the worker still seals a brief generator the package cannot wire");
+  assert(extension.includes("config.briefGenerator === undefined"),
+    "the extension no longer refuses a config that asks for the deleted generator");
+  assert(adjudicator.includes("briefGenerator: config.briefGenerator ?? null"),
+    "the adjudicator must echo the run's brief generator into the evidence");
+  // The intended regime and the observed one are different facts, and the evidence
+  // carries both: a generator that failed every call leaves a full deterministic count.
+  assert(adjudicator.includes("briefProvenance: endOfRunBriefProvenance(entries)"),
+    "the adjudicator must read brief provenance through the end-of-run lens");
+
+  // THE LENS READS THE END OF THE RUN, NOT THE MOMENT OF CREATION. A ladder fold commits
+  // with a deterministic brief and is upgraded at a later commit boundary; the fold record
+  // is immutable, so the upgrade rides that commit record's `brief_upgrade_ids` and a
+  // creation-time count reports the fallback for a fold that ended the run model-briefed.
+  const foldRecordEntry = (foldId, kind) => ({
+    type: "custom",
+    customType: `pi-fold-active-context${FOLD_RECORD_SUFFIX}`,
+    data: { foldId, fold: { id: foldId, provenance: { kind } } },
+  });
+  const commitEntry = (fields) => ({
+    type: "custom",
+    customType: `pi-fold-${CONTEXT_EVENT_SUFFIX}`,
+    data: { kind: "context.commit", applied_marks: 1, ...fields },
+  });
+  const creationTimeCount = (sealed) => sealed
+    .filter((entry) => entry.customType.endsWith(FOLD_RECORD_SUFFIX))
+    .reduce((result, entry) => {
+      const kind = entry.data?.fold?.provenance?.kind ?? "unknown";
+      result[kind] = (result[kind] ?? 0) + 1;
+      return result;
+    }, { model: 0, deterministic: 0 });
+
+  const upgradedRun = [
+    foldRecordEntry("fold_aaaaaaaaaaaaaaaaaaaaaaaa", "deterministic"),
+    foldRecordEntry("fold_bbbbbbbbbbbbbbbbbbbbbbbb", "deterministic"),
+    foldRecordEntry("fold_cccccccccccccccccccccccc", "supplied"),
+    commitEntry({ brief_upgrades: 0, brief_upgrade_ids: "", brief_upgrade_failures: 0,
+      brief_upgrades_waiting: 2 }),
+    commitEntry({ brief_upgrades: 1, brief_upgrade_ids: "fold_aaaaaaaaaaaaaaaaaaaaaaaa",
+      brief_upgrade_failures: 1, brief_upgrade_error: "brief upgrade: summarizer unavailable",
+      brief_upgrades_waiting: 0 }),
+  ];
+  // ANTI-VACUITY. The reading this replaces is computed on the same fixture first: it
+  // reports zero model briefs, so the joined number below cannot be passing by accident.
+  const creationOnly = creationTimeCount(upgradedRun);
+  assert.deepEqual(creationOnly, { model: 0, deterministic: 2, supplied: 1 });
+  const joined = endOfRunBriefProvenance(upgradedRun);
+  assert.equal(creationOnly.model, 0);
+  assert.equal(joined.model, 1, "an upgraded fold must report the brief it ENDED the run with");
+  // The fold nobody upgraded is untouched, and a kind the lane never handles is untouched.
+  assert.equal(joined.deterministic, 1);
+  assert.equal(joined.supplied, 1);
+  assert.equal(joined.join.foldsUpgradedToModel, 1);
+  assert.equal(joined.join.unmatchedUpgrades, 0);
+  // A failure is a failure: counted, loud, and it moves nothing, because the fold kept the
+  // deterministic brief its record states.
+  assert.equal(joined.join.upgradeFailures, 1);
+  assert.equal(joined.join.upgradesWaitingAtLastCommit, 0);
+
+  // An upgrade naming a fold the run never sealed, and a fold named twice, are both
+  // reported rather than counted: the join is by identity, deduplicated, so neither can
+  // inflate the model bucket past the folds that exist.
+  const strayRun = [
+    foldRecordEntry("fold_aaaaaaaaaaaaaaaaaaaaaaaa", "deterministic"),
+    commitEntry({ brief_upgrades: 2, brief_upgrade_failures: 0,
+      brief_upgrade_ids: "fold_aaaaaaaaaaaaaaaaaaaaaaaa,fold_dddddddddddddddddddddddd" }),
+    commitEntry({ brief_upgrades: 1, brief_upgrade_failures: 0,
+      brief_upgrade_ids: "fold_aaaaaaaaaaaaaaaaaaaaaaaa" }),
+  ];
+  const stray = endOfRunBriefProvenance(strayRun);
+  assert.equal(stray.model, 1);
+  assert.equal(stray.deterministic, 0);
+  assert.equal(stray.join.repeatedUpgradeIds, 1);
+  assert.equal(stray.join.unmatchedUpgrades, 1);
+  assert.deepEqual(stray.join.unmatchedUpgradeReasons, { "no-fold-record": 1 });
+  assert.equal(stray.join.upgradesWaitingAtLastCommit, null,
+    "a commit record with no waiting field states null, which is not the same as nothing owed");
+
+  // THE PRE-LANE SHAPE. Every run sealed before the upgrade lane carries commit records
+  // with no brief fields at all (verified against the sealed luna-20260810 rep 3 and
+  // luna-20260807 rep 23 sessions), and those runs must read exactly as they always did.
+  const preLaneRun = [
+    foldRecordEntry("fold_aaaaaaaaaaaaaaaaaaaaaaaa", "deterministic"),
+    foldRecordEntry("fold_bbbbbbbbbbbbbbbbbbbbbbbb", "deterministic"),
+    commitEntry({ freed_tokens: 1_200 }),
+  ];
+  const preLane = endOfRunBriefProvenance(preLaneRun);
+  const { join: preLaneJoin, generator: preLaneGenerator, ...preLaneKinds } = preLane;
+  assert.deepEqual(preLaneKinds, creationTimeCount(preLaneRun));
+  assert.deepEqual(preLaneKinds, { model: 0, deterministic: 2 });
+  // A run that predates the generator-call record reports an empty rollup rather than a
+  // missing one, so "no calls" and "not instrumented" read the same way they always did:
+  // as zero, with the rates null rather than a fabricated 0.
+  assert.equal(preLaneGenerator.calls, 0);
+  assert.equal(preLaneGenerator.spansPerCall, null);
+  assert.equal(preLaneGenerator.cureRate, null);
+
+  // THE GENERATOR ROLLUP (Shane 2026-08-11: how often did agents cure, on which kind of
+  // fold, and what did the summarizer spend). Four calls: a batch of automatic folds, its
+  // cure, a consolidation on its own, and one call carrying both kinds.
+  const briefEntry = (fields) => ({
+    type: "custom",
+    customType: `pi-fold-${CONTEXT_EVENT_SUFFIX}`,
+    data: { kind: "context.brief", outcome: "ok", ...fields },
+  });
+  const rollup = endOfRunBriefProvenance([
+    briefEntry({ group_spans: 0, leaf_spans: 6, source_chars: 60_000, brief_chars: 4_800,
+      cure: false, usage: { input: 61_000, output: 900 } }),
+    briefEntry({ group_spans: 0, leaf_spans: 2, source_chars: 20_000, brief_chars: 1_600,
+      cure: true, usage: { input: 21_000, output: 300 } }),
+    briefEntry({ group_spans: 1, leaf_spans: 0, source_chars: 180_000, brief_chars: 1_900,
+      cure: false, usage: { input: 181_000, output: 400 } }),
+    briefEntry({ group_spans: 1, leaf_spans: 3, source_chars: 90_000, brief_chars: 3_100,
+      cure: false }),
+    briefEntry({ outcome: "timeout", group_spans: 0, leaf_spans: 1, source_chars: 9_000 }),
+  ]).generator;
+  assert.equal(rollup.calls, 5);
+  assert.equal(rollup.spans, 14);
+  assert.equal(rollup.spansPerCall, 2.8, "the batching headline must be spans per call");
+  assert.equal(rollup.cures, 1);
+  assert.equal(rollup.curedSpans, 2);
+  assert.equal(rollup.cureRate, 0.2);
+  assert.deepEqual(rollup.outcomes, { ok: 4, timeout: 1 });
+  // A pure-kind call lands in its own bucket; a call carrying both lands in neither, so no
+  // token is ever attributed to a kind that did not spend it.
+  assert.equal(rollup.byKind.automatic.calls, 3);
+  assert.equal(rollup.byKind.automatic.spans, 9);
+  assert.equal(rollup.byKind.automatic.usage.input, 82_000);
+  assert.equal(rollup.byKind.consolidation.calls, 1);
+  assert.equal(rollup.byKind.consolidation.usage.input, 181_000);
+  assert.equal(rollup.byKind.mixed.calls, 1);
+  assert.equal(rollup.byKind.mixed.spans, 4);
+  assert.deepEqual(rollup.byKind.mixed.usage, {},
+    "a mixed call reported no usage, so its bucket must state none rather than zero");
+  // Usage that was never reported is counted as unknown, never as zero.
+  assert.equal(rollup.byKind.mixed.callsWithoutUsage, 1);
+  assert.equal(rollup.byKind.automatic.callsWithoutUsage, 1);
+  // ANTI-VACUITY: the mixed call's tokens are absent from both pure buckets, which is the
+  // whole reason the third bucket exists.
+  assert.equal(
+    rollup.byKind.automatic.usage.input + rollup.byKind.consolidation.usage.input, 263_000,
+    "a mixed call's tokens leaked into a pure-kind bucket");
+  assert.equal(preLaneJoin.upgradedFolds, 0);
+  assert.equal(preLaneJoin.upgradeFailures, 0);
+  assert.equal(preLaneJoin.upgradesWaitingAtLastCommit, null);
+  // Both regimes present at zero on a run that folded nothing, which is the shape the
+  // arms without the runtime report through this same lens.
+  const empty = endOfRunBriefProvenance([]);
+  assert.equal(empty.model, 0);
+  assert.equal(empty.deterministic, 0);
+  assert(adjudicator.includes("briefProvenance: endOfRunBriefProvenance(runEntries)"),
+    "an arm that registers no runtime must report the same provenance shape");
+
+  const jitiPath = join(PROJECT, "node_modules", "jiti", "lib", "jiti.mjs");
+  assert(existsSync(jitiPath), "could not resolve package-local jiti to build the brief generator");
+  const typeboxPath = join(PI_INSTALL_ROOT, "node_modules", "typebox", "build", "index.mjs");
+  assert(existsSync(typeboxPath), `the pi install does not carry typebox at ${typeboxPath}`);
+  const { createJiti } = await import(pathToFileURL(jitiPath));
+  const jiti = createJiti(import.meta.url, { alias: { typebox: typeboxPath } });
+  // The counts the adjudicator reads come off the sealed fold record, so the record has
+  // to carry the provenance in the first place.
+  const persistence = await jiti.import(join(PROJECT, "extensions", "lib", "persistence.ts"));
+  assert([...persistence.ACTIVE_FOLD_KEYS].includes("provenance"),
+    "the sealed fold record no longer carries its brief provenance");
+
+  // The refusal, driven rather than pattern-matched: a config that still asks for a
+  // generator dies at extension creation, before any provider call, with the deletion
+  // named; a config that asks for none constructs.
+  const { createPiContextExperimentExtension } = await jiti.import(
+    join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"));
+  assert.throws(
+    () => createPiContextExperimentExtension({
+      arm: "pifold", briefGenerator: EXPERIMENT_BRIEF_GENERATOR,
+    }),
+    /briefGenerator is deleted: the runtime briefs deterministically as of 2026-08-14/,
+    "a config carrying the deleted generator was not refused by name at extension creation");
+  // The accept path gets past the refusal: the same call minus the descriptor constructs.
+  // It used to fail downstream instead, on `join(config.runDir, ...)` with no run directory
+  // supplied, and the assertion was that whatever it died of did not name the generator. The
+  // run directory left the namespace on 2026-08-25 and construction touches no path at all
+  // now, so the weaker statement can be the plain one.
+  assert.doesNotThrow(
+    () => createPiContextExperimentExtension({ arm: "pifold" }),
+    "a generator-free config was refused at extension creation");
+  checks.briefGeneratorRefusedAtRegistration = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 51 - a provider error the session RECOVERED from is the provider's weather, not
+// the trial's result, and does not fail the run (Shane 2026-08-11). Pi retries a
+// retryable assistant error by re-sending the same request after a backoff, having first
+// removed the failed attempt from agent state while keeping it in the session as history,
+// so the retried payload is byte-identical and the failed attempt bills zero tokens:
+// nothing the trial measures moved. The latch counted every one of them anyway, which
+// failed rep 1 of luna-20260810 after it completed every stage it planned, and would have
+// failed rep 4 six times over while it ran clean.
+//
+// Held, not forgiven, and the gate's job is that distinction. An error only stops counting
+// once a later assistant response actually succeeds; one still held when the session shuts
+// down latches, because the run ended on it. Two exclusions keep the real failures red:
+// the window wall is never weather (Pi will not retry it either, since context overflow is
+// compaction's job), and only "error" is eligible, because an abort means something
+// cancelled the run and "length" means the answer itself came back truncated. Rep 2 of
+// this campaign died at the wall and MUST stay red, so that case is pinned by name.
+//
+// The recovery is reported rather than absorbed: a rep that stumbled forty times is a
+// different quality of datum from one that never stumbled, and both reading as clean would
+// be the real dishonesty.
+// ---------------------------------------------------------------------------
+{
+  const jitiPath = join(PI_INSTALL_ROOT, "node_modules", "jiti", "lib", "jiti.mjs");
+  const typeboxPath = join(PI_INSTALL_ROOT, "node_modules", "typebox", "build", "index.mjs");
+  const { createJiti } = await import(pathToFileURL(jitiPath));
+  const { createPiContextExperimentExtension } = await createJiti(import.meta.url, {
+    alias: { typebox: typeboxPath },
+  }).import(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"));
+
+  const readLines = (runDir, name) => {
+    const path = join(runDir, name);
+    if (!existsSync(path)) return [];
+    return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  };
+  // One assistant response per provider request, which is the shape the extension enforces:
+  // a message_end with no request in flight is its own latch and would mask this one.
+  const driveStops = (arm, stops) => {
+    const runDir = mkdtempSync(join(tmpdir(), `pi-fold-weather-${arm}-`));
+    useRunChannelDirectory(runDir);
+    const handlers = new Map();
+    const pi = {
+      on(name, handler) {
+        if (!handlers.has(name)) handlers.set(name, []);
+        handlers.get(name).push(handler);
+      },
+      registerTool() {}, registerCommand() {}, sendMessage() {}, async appendEntry() {},
+    };
+    createPiContextExperimentExtension({
+      version: EXPERIMENT_PROTOCOL_VERSION,
+      runId: `weather-${arm}`,
+      runDir,
+      campaignId: "gate-51",
+      arm,
+      mode: "smoke",
+      firstChallenge: "a".repeat(64),
+      stageCount: EXPERIMENT_MODE_PLANS.smoke.stageCount,
+      watchdogMs: EXPERIMENT_MODE_PLANS.smoke.watchdogMs,
+    }).factory(pi);
+    const ctx = {
+      sessionManager: { getLeafId: () => "leaf-1", getBranch: () => [] },
+      // A whole descriptor, because gate 52 latches on one that states no window: this
+      // fixture is exercising provider weather, and a request with healthy output headroom
+      // is the condition under which weather is the only thing left to explain a failure.
+      model: {
+        provider: "openai-codex", id: "gpt-5.6-luna", contextWindow: 272_000, maxTokens: 128_000,
+      },
+      thinkingLevel: "xhigh",
+      getSystemPrompt: () => "system",
+      getEntries: () => [],
+    };
+    // The pifold arm puts the runtime on message_end and session_shutdown too, and the
+    // experiment registers its own AFTER it, so the experiment's handler is the last one.
+    // The counts are pinned: a reordering that would drive the runtime's handler instead
+    // fails here rather than silently measuring nothing.
+    const own = (name, expected) => {
+      const list = handlers.get(name) ?? [];
+      assert.equal(list.length, expected,
+        `the ${name} registration shape changed; this gate would drive the wrong handler`);
+      return list[list.length - 1];
+    };
+    const runtimeShares = arm === "pifold" ? 2 : 1;
+    const request = own("before_provider_request", 1);
+    const messageEnd = own("message_end", runtimeShares);
+    for (const stop of stops) {
+      request({ payload: { tools: [] } }, ctx);
+      messageEnd({
+        message: {
+          role: "assistant",
+          stopReason: stop.reason,
+          errorMessage: stop.errorMessage ?? "",
+          provider: "openai-codex",
+          model: "gpt-5.6-luna",
+        },
+      });
+    }
+    own("session_shutdown", runtimeShares)();
+    return {
+      failures: readLines(runDir, "failure-latch.jsonl"),
+      events: readLines(runDir, "worker-events.jsonl"),
+    };
+  };
+
+  const OVERLOAD = "Codex error: Our servers are currently overloaded. Please try again later.";
+  const WALL = "Codex error: Your input exceeds the context window of this model.";
+
+  // Rep 4's shape at full size: an overload, three more in one sequence, every one of them
+  // answered by a later success. The run is clean and the weather is on the record.
+  const recoveredRun = driveStops("pifold", [
+    { reason: "toolUse" },
+    { reason: "error", errorMessage: OVERLOAD },
+    { reason: "toolUse" },
+    { reason: "error", errorMessage: OVERLOAD },
+    { reason: "error", errorMessage: OVERLOAD },
+    { reason: "error", errorMessage: OVERLOAD },
+    { reason: "toolUse" },
+    { reason: "stop" },
+  ]);
+  assert.deepEqual(recoveredRun.failures, [],
+    "a provider error the session recovered from must not fail the run");
+  const recoveries = recoveredRun.events.filter((row) => row.kind === "provider-error-recovered");
+  assert.equal(recoveries.length, 2, "each recovered sequence gets exactly one record");
+  assert.deepEqual(recoveries.map((row) => row.details.attempts), [1, 3],
+    "the record must carry what the sequence cost in failed attempts");
+  // Anti-vacuity: the reading this gate replaces latched on this very run. Without it the
+  // assertions above would pass on an extension that simply stopped latching anything.
+  assert.equal(recoveredRun.events.filter((row) =>
+    row.kind === "non-terminal-provider-response").length, 4,
+  "the four errors must still be observed; only the verdict on them changed");
+  const weather = providerWeather(recoveredRun.events);
+  assert.equal(weather.recoveredSequences, 2);
+  assert.equal(weather.recoveredAttempts, 4);
+  assert.equal(weather.longestSequenceAttempts, 3);
+  assert.equal(weather.nonTerminalStops, 4);
+
+  // A recovered error costs the trial nothing in tokens and nothing in model input, but it
+  // can still cost the whole prefix cache: the pinned transport rides WebSocket delta
+  // requests, and a connection the error dropped re-sends the context cold. That lands on
+  // pooled cache share, which is this campaign's headline, so it is counted rather than
+  // absorbed. Rep 4 of luna-20260810 is the fixture's source: three cold restarts against
+  // an unmoved projection, one restart whose cache survived.
+  const responseLedger = (rows) => rows.flatMap((row) => [
+    { kind: "context-projection", projectedChars: row.chars },
+    { kind: "provider-request" },
+    { kind: "provider-response", stopReason: row.stop, usage: { cacheRead: row.cacheRead, input: row.input } },
+  ]);
+  const cache = providerWeather([], responseLedger([
+    // Cache intact across the stumble: the connection held.
+    { stop: "toolUse", chars: 1000, cacheRead: 150_000, input: 3_000 },
+    { stop: "error", chars: 1000, cacheRead: 0, input: 0 },
+    { stop: "toolUse", chars: 1000, cacheRead: 152_000, input: 1_400 },
+    // Cold restart: same projection either side, cache read fell to zero.
+    { stop: "error", chars: 1000, cacheRead: 0, input: 0 },
+    { stop: "toolUse", chars: 1000, cacheRead: 0, input: 163_000 },
+    // The cache rebuilt, so the next stumble has something to lose again.
+    { stop: "toolUse", chars: 1000, cacheRead: 160_000, input: 2_000 },
+    // A fold moved the projection, so folding explains this miss just as well. The
+    // experiment's own subject must never be laundered into the weather column.
+    { stop: "error", chars: 1000, cacheRead: 0, input: 0 },
+    { stop: "toolUse", chars: 400, cacheRead: 0, input: 84_000 },
+  ]));
+  assert.equal(cache.coldRestarts, 1, "only a miss against an unmoved projection is weather");
+  assert.equal(cache.coldRestartFreshTokens, 163_000,
+    "the fresh tokens a cold restart cost must be readable, not just its count");
+  assert.equal(cache.cacheSurvivedRestarts, 1, "a stumble whose cache survived is not a cold restart");
+  assert.equal(cache.unattributableCacheMisses, 1,
+    "a miss a fold explains equally well is charged to neither column");
+
+  // The cache half reads a run sealed before the recovery events existed, because it comes
+  // off the provider ledger every run already carries. Pre-lane runs must not read as clean
+  // weather simply because they predate the events.
+  assert.equal(cache.recoveredSequences, 0, "no recovery events means no recovery counts");
+  assert(cache.coldRestarts > 0, "but the cache reading still works without them");
+
+  // The run ended on the error: nothing ever came back, so it was never survived.
+  const strandedRun = driveStops("pifold", [
+    { reason: "toolUse" },
+    { reason: "error", errorMessage: OVERLOAD },
+  ]);
+  assert.equal(strandedRun.failures.length, 1, "an error the run never got past must latch");
+  assert.equal(strandedRun.failures[0].phase, "provider-error-unrecovered");
+  assert.deepEqual(providerWeather(strandedRun.events).recoveredSequences, 0,
+    "an error that was never survived is a latch entry, never a recovery");
+
+  // Rep 2 of luna-20260810 died here, and this is the case that must never be forgiven:
+  // the wall is the one thing a managed arm exists to avoid. A later success does not
+  // rescue it, which is exactly what separates it from weather.
+  const wallRun = driveStops("pifold", [
+    { reason: "error", errorMessage: WALL },
+    { reason: "toolUse" },
+    { reason: "stop" },
+  ]);
+  assert.equal(wallRun.failures.length, 1, "a window-overflow error must latch on a managed arm");
+  assert.match(wallRun.failures[0].detail, /window-overflow/);
+  assert.equal(providerWeather(wallRun.events).recoveredSequences, 0,
+    "the wall must never be counted as weather the run recovered from");
+
+  // An abort means something cancelled the run and a truncated answer is a changed answer.
+  // Neither is the provider's weather, and a later success does not clear either.
+  for (const reason of ["aborted", "length"]) {
+    const run = driveStops("pifold", [
+      { reason },
+      { reason: "toolUse" },
+      { reason: "stop" },
+    ]);
+    assert.equal(run.failures.length, 1, `a ${reason} stop must still latch`);
+    assert.equal(run.failures[0].detail, reason);
+  }
+
+  // The unmanaged arm ends at the wall by design and latches none of this, and the native
+  // arm's overflow breaths stay its own bounded lifecycle. Neither may be disturbed.
+  assert.deepEqual(driveStops("unmanaged", [
+    { reason: "error", errorMessage: WALL },
+  ]).failures, [], "the unmanaged arm's overflow point is its datum, not a failure");
+  const nativeBreaths = driveStops("native", [
+    { reason: "error", errorMessage: WALL },
+    { reason: "toolUse" },
+    { reason: "stop" },
+  ]);
+  assert.deepEqual(nativeBreaths.failures, [],
+    "a native overflow breath is compaction's lifecycle, bounded elsewhere by its budget");
+
+  // The budget is pinned rather than ambient: retry settings otherwise come from whatever
+  // the machine's settings files say, which is not a property a sealed run can state. Eight
+  // because Pi's default of 3 was fully spent by one rep-4 sequence with no margin left.
+  // The base is 1,000 because Pi's wait is `baseDelayMs * 2 ** (attempt - 1)` uncapped, so
+  // the base sets the whole schedule: sol-20260811 rep 2 spent 16.5 minutes of 303 asleep
+  // in backoff across 16 errored responses, in a run that ended two stages short.
+  assert.deepEqual({ ...EXPERIMENT_PROVIDER_RETRY },
+    { enabled: true, maxRetries: 8, baseDelayMs: 1_000 });
+  // A fully spent budget must stay inside a few minutes of a run bounded at hours: the
+  // schedule is the base doubling, so this is the property the base is chosen for.
+  const spentMs = Array.from({ length: EXPERIMENT_PROVIDER_RETRY.maxRetries },
+    (_unused, attempt) => EXPERIMENT_PROVIDER_RETRY.baseDelayMs * 2 ** attempt)
+    .reduce((sum, value) => sum + value, 0);
+  assert(spentMs <= 300_000,
+    `a fully spent retry budget sleeps ${spentMs}ms, which is a wall-clock cost the run cannot absorb`);
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  assert(worker.includes("retry: { ...EXPERIMENT_PROVIDER_RETRY }"),
+    "the worker must hand the pinned retry budget to the session it builds");
+  assert(worker.includes("Run provider retry pin did not reach the session"),
+    "a retry budget that did not reach the session must be loud, like the transport pin");
+
+  checks.recoveredProviderWeatherDoesNotFailTheRun = true;
+}
+
+// GATE 52 - the run supplies no output ceiling of its own, and says what Pi's own ceiling
+// arithmetic left it (Shane 2026-08-11: "Don't ever use maxtokens").
+//
+// A maxTokens value does not ask for a shorter answer, it stops the answer. This harness
+// carried two of them: the worker cut the session to 16,384 and the grader to 8,192, on a
+// descriptor that declares 128,000. Both are deleted here and neither may return.
+//
+// The larger defect is that Pi sends a ceiling whether or not a caller sets one, derived
+// per request as `contextWindow - estimate - 4096`, floored at 1, then raised to the API's
+// own minimum of 16. The pinned descriptor declares `contextWindow: 272000`, which its own
+// cost table shows is a PRICING boundary (`inputTokensAbove: 272000`) while the provider
+// was measured accepting 339,689. Sol-20260811 rep 2 set its serving budget from the
+// measured capacity, ran occupancy past 300k, and sent 56 of 141 requests with
+// `max_output_tokens: 16`. Those failed 23.2 percent of the time against 3.9 percent for
+// requests that got the whole budget, and every failure was recorded as the bare word
+// "error" with the provider's own message dropped on the floor.
+//
+// So three things are pinned: our arithmetic still matches Pi's, a managed arm that starves
+// itself latches at the first request instead of at the seal, and a stop reason travels
+// with what the provider actually said.
+// ---------------------------------------------------------------------------
+{
+  const piOptions = readFileSync(
+    join(PI_INSTALL_ROOT, "node_modules", "@earendil-works", "pi-ai", "dist", "api", "simple-options.js"),
+    "utf8");
+  const piEstimate = readFileSync(
+    join(PI_INSTALL_ROOT, "node_modules", "@earendil-works", "pi-ai", "dist", "utils", "estimate.js"),
+    "utf8");
+  const piResponses = readFileSync(
+    join(PI_INSTALL_ROOT, "node_modules", "@earendil-works", "pi-ai", "dist", "api", "openai-responses.js"),
+    "utf8");
+  // Drift detection, not reimplementation: the numbers below are the vendor's, and a Pi
+  // upgrade that moves any of them must break this gate rather than silently invalidate the
+  // budget the ledger reports.
+  assert(piOptions.includes(`const CONTEXT_SAFETY_TOKENS = ${PI_OUTPUT_BUDGET.safetyTokens}`),
+    "Pi's context safety reserve moved; PI_OUTPUT_BUDGET.safetyTokens no longer describes it");
+  assert(piEstimate.includes(`const CHARS_PER_TOKEN = ${PI_OUTPUT_BUDGET.charsPerToken}`),
+    "Pi's token estimator divisor moved; PI_OUTPUT_BUDGET.charsPerToken no longer describes it");
+  assert(piResponses.includes(`const OPENAI_RESPONSES_MIN_OUTPUT_TOKENS = ${PI_OUTPUT_BUDGET.apiFloorTokens}`),
+    "the Responses API output floor moved; PI_OUTPUT_BUDGET.apiFloorTokens no longer describes it");
+  assert(piOptions.includes("model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS"),
+    "Pi no longer derives the output budget by subtraction; servedOutputBudget must be re-read against it");
+  assert(piOptions.includes("options?.maxTokens ?? model.maxTokens"),
+    "Pi no longer falls back to the descriptor's own maximum; the no-ceiling posture must be re-examined");
+
+  // The rep-2 geometry, reproduced. A healthy request gets the descriptor's maximum less
+  // what the window has left; a request past the declared window gets the API floor.
+  const WINDOW = 272_000, DECLARED_MAX = 128_000;
+  const roomy = servedOutputBudget(
+    { contextWindow: WINDOW, contextChars: 100_000 * 4, modelMaxTokens: DECLARED_MAX });
+  assert.equal(roomy, DECLARED_MAX,
+    "a request with room to spare must be served the descriptor's own maximum");
+  const squeezed = servedOutputBudget(
+    { contextWindow: WINDOW, contextChars: 200_000 * 4, modelMaxTokens: DECLARED_MAX });
+  assert.equal(squeezed, WINDOW - 200_000 - PI_OUTPUT_BUDGET.safetyTokens,
+    "once the window has less left than the descriptor allows, the remainder is what is served");
+  assert(squeezed < DECLARED_MAX,
+    "the squeezed case must actually be squeezed or it repeats the roomy one");
+  const starved = servedOutputBudget(
+    { contextWindow: WINDOW, contextChars: 320_000 * 4, modelMaxTokens: DECLARED_MAX });
+  assert.equal(starved, PI_OUTPUT_BUDGET.apiFloorTokens,
+    "a request past the declared window must be served the API floor, which is the rep-2 defect");
+  assert(starved < PI_OUTPUT_BUDGET.latchBelowTokens,
+    "the rep-2 defect must be on the latching side of the threshold or the latch is decorative");
+  // The crossover is a property of the arithmetic, so it is asserted rather than assumed:
+  // below this occupancy the budget is whole, above it the window starts eating the answer.
+  const crossover = WINDOW - PI_OUTPUT_BUDGET.safetyTokens - PI_OUTPUT_BUDGET.latchBelowTokens;
+  assert.equal(
+    servedOutputBudget({ contextWindow: WINDOW, contextChars: crossover * 4, modelMaxTokens: DECLARED_MAX }),
+    PI_OUTPUT_BUDGET.latchBelowTokens,
+    "the latch threshold does not sit where the arithmetic puts it");
+
+  const workerSource = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  const graderSource = readFileSync(join(PROJECT, "scripts", "grade_pi_context_experiment.mjs"), "utf8");
+  const extensionSource = readFileSync(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"), "utf8");
+  // Neither provider caller may set a ceiling. Matched on assignment so the word may still
+  // appear in the comments that explain why it is gone, and in the manifest that records
+  // the descriptor's own declared value.
+  // Quoted or bare, camel or wire spelling: the ban is on the value reaching a provider,
+  // not on one way of spelling the key.
+  const assigns = (source) =>
+    /["']?(?:maxTokens|max_tokens|max_output_tokens|max_completion_tokens)["']?\s*:\s*[0-9_]+/
+      .test(source);
+  assert(!assigns(workerSource), "the worker set an output ceiling again");
+  assert(!assigns(graderSource), "the grader set an output ceiling again");
+  assert(!assigns(extensionSource), "the experiment extension set an output ceiling");
+  // Anti-vacuity: the matcher must catch every spelling of the thing it forbids, and must
+  // still pass the shape that is allowed, which is recording the descriptor's own value.
+  for (const defect of [
+    "  const model = { ...discoveredModel, maxTokens: 16_384 };",
+    `      model: { ...discovered, maxTokens: 8_192 },`,
+    `  const params = { "max_output_tokens": 512 };`,
+    `  const params = { max_tokens: 1024 };`,
+  ]) {
+    assert(assigns(defect), `the ceiling matcher does not recognise: ${defect.trim()}`);
+  }
+  assert(!assigns("      maxTokens: model.maxTokens,"),
+    "the ceiling matcher must not forbid recording the descriptor's own declared value");
+  assert(workerSource.includes("const model = discoveredModel;"),
+    "the worker must hand the session the descriptor it discovered, unmodified");
+  assert(workerSource.includes("declares no output maximum"),
+    "a descriptor with no declared maximum must be refused rather than given one of ours");
+
+  // The ledger must carry the budget and the provider's own words.
+  assert(extensionSource.includes("outputBudgetTokens"),
+    "the provider-request record must state the output budget the request was served");
+  assert(/errorMessage:\s*typeof event\.message\.errorMessage/.test(extensionSource),
+    "the provider-response record must carry the provider's message, not just its stop reason");
+  assert(extensionSource.includes(`appendFailure(config, "starved-output-budget"`),
+    "a starved output budget must latch rather than be left to show up as an error rate");
+  assert(/config\.arm === "pifold"/.test(extensionSource),
+    "the starvation latch must be scoped to the arm whose occupancy the run itself sets");
+  // A guard that cannot read its inputs must say so rather than pass. Without this the
+  // whole latch is one descriptor change away from being decorative.
+  assert(extensionSource.includes(`appendFailure(config, "unreadable-output-budget"`),
+    "a descriptor the output budget cannot be read from must latch, not silently skip the check");
+
+  checks.noOutputCeilingAndTheServedBudgetIsRecorded = true;
+}
+
+// GATE 53 - a run whose folding SUSPENDED fails by that name, and fails on it before the
+// symptom it eventually dies of.
+//
+// sol-20260812 reps 3 and 4 both ended on "Request was aborted" and both reported exactly
+// that. Neither report was wrong and neither was useful. What happened in both was the
+// same: the last applied commit of the run emitted its `context.commit` and eleven
+// `context.fold` records, persisted none of them, rolled the state back (rep 3 from
+// revision 143 to 134, rep 4 from 153 to 143), and suspended automatic folding. Suspension
+// is permanent for the session, so occupancy then climbed with nothing able to reclaim it,
+// and the request that finally died was twenty minutes downstream of the decision that
+// killed it. Rep 2, same plan and same seed, ran ten applied commits with every fold
+// landing, which is why this is worth a named latch rather than a tolerance.
+//
+// The runtime half of the fix is that suspension is now an event rather than a UI
+// notification a headless host discards; this gate is the adjudication half. Scoped to the
+// arm that folds, because a run with no folding runtime can never announce one.
+// ---------------------------------------------------------------------------
+{
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  const suspendCheck = worker.slice(
+    worker.indexOf("const foldFailures = armRuntime.activeContextEnabled"),
+    worker.indexOf("Experiment worker did not end at one terminal provider stop"),
+  );
+  assert(suspendCheck.length > 0,
+    "the worker does not check the session for an announced folding suspension");
+  assert(suspendCheck.includes(`entry.data?.kind === "context.suspend"`),
+    "the suspension check does not read the runtime's own suspension event");
+  assert(/assertExperiment\(suspensions\.length === 0/.test(suspendCheck),
+    "an announced suspension does not fail the run");
+  // Ordering is the point: the cause is asserted before the symptom, or the report names
+  // the aborted request again and the suspension stays buried.
+  assert(worker.indexOf("const foldFailures = armRuntime.activeContextEnabled") <
+    worker.indexOf("Experiment worker did not end at one terminal provider stop"),
+  "the suspension check runs after the terminal-stop check, so the report names the symptom");
+  // Actionable, not merely red: the phase, the revision and the error itself travel.
+  assert(/phase \$\{suspensions\[0\]\?\.phase\}/.test(suspendCheck) &&
+    /revision \$\{suspensions\[0\]\?\.state_revision\}/.test(suspendCheck) &&
+    /suspensions\[0\]\?\.error/.test(suspendCheck),
+  "the suspension failure does not name the phase, the revision and the error");
+  // Scoped to the arm that folds. Without this the unmanaged and native arms would be
+  // judged against an event their runtime cannot emit.
+  assert(suspendCheck.includes("armRuntime.activeContextEnabled"),
+    "the suspension check is not scoped to the arm whose runtime can fold");
+
+  // And the runtime really does announce it, which is what makes the check above more than
+  // a source pin: the event kind is declared, and the suspension path emits it.
+  const runtimeSource = readFileSync(join(PROJECT, "extensions", "active-context.ts"), "utf8");
+  const suspendFn = runtimeSource.slice(
+    runtimeSource.indexOf("const suspendAutomatic = ("),
+    runtimeSource.indexOf("ladder.pendingContextNote = `Automatic context management suspended"),
+  );
+  assert(suspendFn.length > 0, "the suspension path was not found where it is pinned");
+  assert(/emit\("context\.suspend"/.test(suspendFn),
+    "suspending automatic folding still reports only through the host UI");
+  assert(/state_revision/.test(suspendFn) && /durable_revision/.test(suspendFn),
+    "the suspension event omits the two revisions whose disagreement is the symptom");
+  assert(/outcome: "suspended"/.test(suspendFn),
+    "the suspension record does not declare its outcome");
+  // Every failed automatic transaction reaches that announcement, on the first one. A
+  // bounded retry used to sit here and swallow the first three: it was removed because a
+  // retry is a fallback, and a fallback is how a defect survives long enough to be a
+  // mystery. The transaction must therefore hold no outcome of its own.
+  const transaction = runtimeSource.slice(
+    runtimeSource.indexOf("const runAutomaticTransaction = async ("),
+    runtimeSource.indexOf("const queueAutomatic = ("),
+  );
+  assert(/suspendAutomatic\(error, phase, ctx, key, disposition\)/.test(transaction),
+    "a failed automatic transaction no longer reaches the suspension announcement");
+  assert(!/outcome: "retrying"/.test(transaction),
+    "a failed automatic transaction still has an outcome that is not a suspension");
+  // And EVERY automatic caller is inside it. A commit that vanishes at persistence has
+  // to restore the state it entered with and announce itself, and the boundary used to
+  // persist outside the transaction, which left a discarded commit with nothing to roll
+  // back to. The callers are DISCOVERED rather than listed, so a new one added outside
+  // the block fails here instead of being missed; the list used to name
+  // attemptAutomaticRung beside the commit, and that caller was deleted on 2026-08-21
+  // with eager staging, leaving the commit as the only automatic mutation there is.
+  const queue = runtimeSource.slice(
+    runtimeSource.indexOf("const queueAutomatic = ("),
+    runtimeSource.indexOf("const projectionCandidates = ("),
+  );
+  const automaticCallers = [...runtimeSource.matchAll(/const (attemptAutomatic\w+) = \(/g)]
+    .map((match) => match[1]);
+  assert(automaticCallers.length >= 1,
+    "no automatic caller was found at all, so this check proves nothing");
+  for (const caller of automaticCallers) {
+    assert(new RegExp(`const ${caller} = \\([\\s\\S]*?queueAutomatic\\(`).test(queue),
+      `${caller} reaches the ladder outside the durable transaction`);
+  }
+  const kinds = readFileSync(join(PROJECT, "extensions", "lib", "instrumentation.ts"), "utf8");
+  assert(kinds.includes(`| "context.suspend"`),
+    "context.suspend is not a declared kind of the canonical event stream");
+
+  checks.suspendedFoldingFailsTheRunByName = true;
+}
+
+// GATE 54 - an applied commit owes a receipt, and a run where one goes unpaid fails on it.
+//
+// Gate 53 catches the loss through the runtime's own announcement. That works, and it only
+// works on builds that announce. This is the same loss read from the event stream alone,
+// which is what makes it worth having twice: `noteAutomaticReceipt` is the last statement of
+// the rung application, so a commit that reports applied marks and never delivers a receipt
+// threw partway through, leaving its folds in the stream and nowhere else, writing no fold
+// record and no state entry, and putting its marks back to pending.
+//
+// Measured across all six sealed sol-20260812 runs. Reps 2 and 5 are clean. Reps 3, 4 and 6
+// are the losses already named. Rep 1 is why this gate exists rather than being folded into
+// gate 53: it lost fourteen folds at revision 99 on a build that announced nothing, its run
+// report said nothing was wrong, and the loss sat unnamed in the record until this lens was
+// run against it. Every loss so far shows the next projection reading exactly `applied_marks`
+// revisions below the commit; the lens records that and does not require it, because a future
+// loss that rolls back differently is still a loss.
+// ---------------------------------------------------------------------------
+{
+  const commit = (seq, revision, appliedMarks, extra = {}) =>
+    ({ kind: "context.commit", seq, revision, applied_marks: appliedMarks, deferred: false,
+      trigger: "band-top", ...extra });
+  const healthy = receiptLens([
+    { kind: "context.capacity", seq: 1, revision: 0 },
+    commit(2, 36, 10),
+    { kind: "context.fold", seq: 3, revision: 36 },
+    { kind: "context.absorb", seq: 4, revision: 36 },
+    { kind: "context.receipt", seq: 5, revision: 36, receipt_kind: "epoch-commit" },
+    { kind: "context.projection", seq: 6, revision: 36 },
+  ]);
+  // Anti-vacuity: a fixture with no applied commit would pass the clean assertion for the
+  // wrong reason, and would say nothing about whether the lens can see a commit at all.
+  assert(healthy.appliedCommits === 1,
+    "the healthy fixture holds no applied commit, so a clean verdict on it means nothing");
+  assert(healthy.commitsWithoutReceipt === 0 && healthy.missing.length === 0,
+    "a commit whose receipt arrives before the next projection was read as unpaid");
+
+  // The real shape of the loss, taken from rep 6: commit, response, folds, absorb, then a
+  // projection reading nine revisions lower with no receipt anywhere between.
+  const lost = receiptLens([
+    commit(817, 394, 9),
+    { kind: "context.response", seq: 818, revision: 394 },
+    { kind: "context.fold", seq: 821, revision: 394 },
+    { kind: "context.absorb", seq: 830, revision: 394 },
+    { kind: "context.projection", seq: 832, revision: 385 },
+    { kind: "context.receipt", seq: 850, revision: 385, receipt_kind: "epoch-commit" },
+  ]);
+  assert(lost.commitsWithoutReceipt === 1, "a commit that delivered no receipt was read as paid");
+  assert(lost.missing[0].revision === 394 && lost.missing[0].nextProjectionRevision === 385 &&
+    lost.missing[0].revisionsRolledBack === 9 && lost.missing[0].appliedMarks === 9,
+  "the unpaid commit does not carry the revisions and the fold count needed to name it");
+  // A receipt AFTER the next projection belongs to a later rung and must not pay this debt.
+  // Without the projection boundary the lens would clear every loss that is followed by any
+  // later healthy commit, which is most of them.
+  assert(lost.receipts === 1,
+    "the fixture's later receipt vanished, so the boundary is being tested against nothing");
+
+  // A deferred commit and a commit that applied nothing are not debts. Both occur in every
+  // run, and counting them would make the check fire constantly and be switched off.
+  const notDebts = receiptLens([
+    commit(10, 40, 0),
+    commit(11, 40, 5, { deferred: true }),
+    { kind: "context.projection", seq: 12, revision: 40 },
+  ]);
+  assert(notDebts.appliedCommits === 0 && notDebts.commitsWithoutReceipt === 0,
+    "a deferred commit or a commit that applied nothing was counted as owing a receipt");
+
+  // The worker reads that lens, fails on it, and names what it found.
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  const receiptCheck = worker.slice(
+    worker.indexOf("const contextEvents = armRuntime.activeContextEnabled"),
+    worker.indexOf("Experiment worker did not end at one terminal provider stop"),
+  );
+  assert(receiptCheck.length > 0, "the worker does not check the stream for an unpaid commit");
+  assert(/const receipts = receiptLens\(contextEvents\)/.test(receiptCheck),
+    "the worker derives the unpaid commits itself instead of reading the shared lens");
+  assert(/assertExperiment\(receipts\.commitsWithoutReceipt === 0/.test(receiptCheck),
+    "an applied commit that never delivered a receipt does not fail the run");
+  assert(/unpaid\?\.seq/.test(receiptCheck) && /unpaid\?\.revision/.test(receiptCheck) &&
+    /unpaid\?\.appliedMarks/.test(receiptCheck) && /unpaid\?\.nextProjectionRevision/.test(receiptCheck),
+  "the unpaid-commit failure does not name the seq, the revisions and the fold count");
+  assert(receiptCheck.includes("armRuntime.activeContextEnabled"),
+    "the unpaid-commit check is not scoped to the arm whose runtime can fold");
+  // Cause before symptom, and after the suspension, which carries the error verbatim and is
+  // the better message on a build where both fire.
+  assert(worker.indexOf("const suspensions = foldFailures") <
+    worker.indexOf("const contextEvents = armRuntime.activeContextEnabled") &&
+    worker.indexOf("const contextEvents = armRuntime.activeContextEnabled") <
+    worker.indexOf("Experiment worker did not end at one terminal provider stop"),
+  "the unpaid-commit check does not sit between the suspension and the terminal stop");
+  // A clean run says so. Without this the only evidence the check ran is that nothing failed,
+  // which reads the same as the check being absent.
+  assert(/commitsWithoutReceipt: receipts\.commitsWithoutReceipt/.test(worker) &&
+    /appliedCommits: receipts\.appliedCommits/.test(worker),
+  "a passing run does not record how many commits were checked and how many went unpaid");
+
+  // And the invariant is grounded in the runtime, not only in the fixtures: the receipt is
+  // the last thing the COMMIT does, which is what makes its absence a throw. It used to
+  // be the last thing the rung did, on two paths, because the rung owned the epoch; the
+  // boundary owns it now and there is one path.
+  const runtimeSource = readFileSync(join(PROJECT, "extensions", "active-context.ts"), "utf8");
+  const commitEpoch = runtimeSource.slice(
+    runtimeSource.indexOf("const runCommitEpoch = async ("),
+    runtimeSource.indexOf("const clearCommitLatchBelowTrigger = ("),
+  );
+  assert(commitEpoch.length > 0, "the commit epoch was not found where it is pinned");
+  const deliveries = [...commitEpoch.matchAll(/noteAutomaticReceipt\([^;]*\);\n(\s*)(\S[^\n]*)/g)];
+  assert(deliveries.length >= 1,
+    `the commit delivers a receipt on ${deliveries.length} path(s), and it has one to deliver on`);
+  // Every delivery is the last thing that happens before the epoch is handed back. That is
+  // what makes a missing receipt mean a throw rather than a path we forgot to instrument.
+  for (const [, , next] of deliveries) {
+    assert(next.startsWith("return epoch;"),
+      `a receipt delivery is followed by ${JSON.stringify(next)} rather than by the return, ` +
+      "so the commit can do more work after paying and a missing receipt stops meaning a throw");
+  }
+  // And NOTHING ELSE in the runtime pays one. A receipt describes bytes that moved, and
+  // the commit is the only thing that moves bytes, so a second payer would be describing
+  // a rewrite that did not happen. This used to be stated as "the rung pays no receipt",
+  // naming applyAutomaticRung; that function was deleted on 2026-08-21 along with eager
+  // staging, and counting the calls says the same thing without naming a caller.
+  const withoutDeclaration = runtimeSource.replace("const noteAutomaticReceipt = (", "");
+  const callSites = [...withoutDeclaration.matchAll(/noteAutomaticReceipt\(/g)].length;
+  const commitCallSites = [...commitEpoch.matchAll(/noteAutomaticReceipt\(/g)].length;
+  assert(commitCallSites >= 1, "the commit epoch pays no receipt at all");
+  assert.equal(callSites, commitCallSites,
+    `${callSites - commitCallSites} receipt(s) are paid outside the commit epoch, and only ` +
+    "the commit moves bytes for one to describe");
+
+  checks.anAppliedCommitOwesAReceipt = true;
+}
+
+// GATE 55 - a worker killed from outside still writes its report, so the run stays readable.
+//
+// The supervisor sends SIGTERM when its deadline passes. Node's default handler ends the
+// process there: the `finally` that writes `worker-report.json` does not run, because a
+// signal is not an unwound stack. `adjudicate` refuses a run without that file, so a run
+// killed at the deadline is not a failed run, it is an unreadable one.
+//
+// sol-20260812 rep 7's pifold arm is the case. It released all 64 of 64 stages, folded 27
+// commits with every receipt paid and no suspension, then spent 281 more minutes recovering
+// its own evidence through 83 distinct peeks before the deadline killed it. Six hours of
+// provider spend, a complete session file on disk, and nothing that could be adjudicated or
+// set beside the native arm that ran in the same window.
+//
+// The report this writes is explicitly a failure: ok false, the signal named, and the run
+// still fails. That distinction is the whole point. It rescues the evidence, not the run.
+// ---------------------------------------------------------------------------
+{
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  assert(/process\.on\(signal, \(\) => writeSignalReport\(signal\)\)/.test(worker),
+    "the worker installs no signal handler, so a SIGTERM still discards its report");
+  const handler = worker.slice(
+    worker.indexOf("const writeSignalReport = ("),
+    worker.indexOf("for (const signal of ["),
+  );
+  assert(handler.length > 0, "the signal report writer was not found where it is pinned");
+  // Both signals, because the supervisor sends SIGTERM and an operator sends SIGINT, and a
+  // run killed by hand is worth exactly as much evidence as one killed by the deadline.
+  assert(/\["SIGTERM", "SIGINT"\]/.test(worker),
+    "the worker does not preserve its report on both the supervisor's signal and an operator's");
+  // Synchronous, because a signal handler that awaits does not finish before the process ends.
+  assert(/writeRunChannelDocument\(REPORT_CHANNEL,/.test(handler) && !/await /.test(handler),
+    "the signal report is written asynchronously, so the process can end before it lands");
+  // Exclusive, so a worker that already wrote a real report cannot have it overwritten by
+  // the signal that follows a normal exit. `flag: "wx"` used to carry that and a descriptor
+  // cannot, so the write-once rule moved into the channel and is DRIVEN here rather than
+  // matched: a second write is refused and the first report's bytes are still on disk.
+  {
+    const onceDir = mkdtempSync(join(tmpdir(), "pi-fold-report-once-"));
+    useRunChannelDirectory(onceDir);
+    assert.equal(writeRunChannelDocument("worker-report.json", "{\"ok\":true}\n"), true,
+      "the first write of a run channel document was refused");
+    assert.equal(writeRunChannelDocument("worker-report.json", "{\"ok\":false}\n"), false,
+      "the signal report can overwrite a report the ordinary path already wrote");
+    assert.equal(readFileSync(join(onceDir, "worker-report.json"), "utf8"), "{\"ok\":true}\n",
+      "a refused second write still reached the file");
+    rmSync(onceDir, { recursive: true, force: true });
+  }
+  // It must NOT read as a pass. A rescued report that said ok true would turn a killed run
+  // into a clean one, which is worse than losing it.
+  assert(/ok: false/.test(handler) && /requiresIndependentAdjudication: true/.test(handler),
+    "the signal report does not declare itself a failure");
+  assert(/terminatedBySignal: signal/.test(handler),
+    "the signal report does not name the signal that ended the run");
+  assert(/process\.exit\(1\)/.test(handler),
+    "a signalled worker does not exit non-zero");
+  // And the fields the adjudicator needs to read the run at all.
+  for (const field of ["runId", "arm", "sessionId", "sessionFile", "deadlineFired",
+    "workerStartedWallMs", "workerFinishedWallMs"]) {
+    assert(new RegExp(`\\b${field}\\b`).test(handler),
+      `the signal report omits ${field}, which the run cannot be read without`);
+  }
+
+  checks.aKilledWorkerStillWritesItsReport = true;
+}
+
+// GATE 56 IS RETIRED (2026-08-25). It pinned the resume: a model that ended its turn early
+// was nudged on, a harness that broke never was, and the prompt withheld the key so a run
+// whose agent had lost one was measuring recovery. Delivery is push now, so there is no key
+// to withhold, no turn to resume, and the delivered-stage counter is the worker's own rather
+// than a walk over response files. Its number stays spent.
+
+// GATE 57 - a supervisor killed from outside still writes the run's candidate report, and
+// does not wait forever for a worker that cannot answer.
+//
+// Gate 55 gave the WORKER a signal handler so a killed run stays readable. sol-20260812
+// rep 9 is the case that handler cannot cover: signal handlers run on the event loop, and
+// that worker held 98% of a core in synchronous JS for 118 minutes, so `systemctl stop`
+// logged "Killing process 1004322 (node-MainThread) with signal SIGKILL" and the run left
+// no worker report and no candidate report at all. Everything the six-hour arm measured
+// had to be recovered by reading the session, pace and provider ledgers by hand.
+//
+// The supervisor is the process that CAN answer: it spends the run idle between IPC polls.
+// It routes the signal into the same failure path a blown deadline takes, which latches,
+// ends the worker and falls through to the finalization that writes the report. And it
+// ends the worker on a bound, because a worker that cannot run its own handler cannot
+// exit on request either, and waiting on one that never will is how the supervisor came to
+// be killed beside it.
+// ---------------------------------------------------------------------------
+{
+  const supervisor = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment.mjs"), "utf8");
+  assert(/for \(const signal of \["SIGTERM", "SIGINT"\]\) \{\s*process\.on\(signal, \(\) => \{ terminationSignal \?\?= signal; \}\);/
+    .test(supervisor),
+  "the supervisor installs no handler for both signals, so a stop still discards its report");
+  // FIRST in the wait loop. The deadline and the lost-worker checks both throw their own
+  // message, and a run ended from outside reported under either of those names is the
+  // "Request was aborted" problem again: true, and useless.
+  const loop = supervisor.slice(supervisor.indexOf("async function supervisedWait("));
+  assert(loop.indexOf("if (terminationSignal) throw") > 0 &&
+    loop.indexOf("if (terminationSignal) throw") < loop.indexOf("exceeded its monotonic deadline"),
+  "the wait loop does not read the signal, or reads it after the deadline it would be reported as");
+  assert(/terminatedBySignal: terminationSignal,/.test(supervisor),
+    "the candidate report does not name the signal that ended the run");
+
+  // AND THE BOUND IS DRIVEN FOR REAL, against a child that ignores SIGTERM exactly as a
+  // CPU-bound worker does. Extracted and evaluated rather than read, so this proves the
+  // supervisor escapes rather than that the source contains a kill.
+  const source = supervisor.slice(
+    supervisor.indexOf("async function endWorker("),
+    supervisor.indexOf("async function supervisedWait("),
+  );
+  assert(source.length > 0, "the worker termination helper was not found where it is pinned");
+  const endWorker = new Function("WORKER_TERMINATION_GRACE_MS", `${source}\nreturn endWorker;`)(300);
+  const stubborn = spawn(process.execPath, [
+    "-e", "process.on('SIGTERM', () => {}); process.on('SIGINT', () => {}); " +
+      "setInterval(() => {}, 1000); console.log('ready');",
+  ], { stdio: ["ignore", "pipe", "ignore"] });
+  const completion = new Promise((resolve) => {
+    stubborn.on("exit", (code, signal) => resolve({ code, signal }));
+  });
+  // Its handlers must be installed before the first signal, or this would measure Node's
+  // default handler and pass for the wrong reason.
+  await new Promise((resolve) => stubborn.stdout.once("data", resolve));
+  const startedMs = Date.now();
+  const exit = await endWorker(stubborn, completion);
+  const elapsedMs = Date.now() - startedMs;
+  assert.equal(exit.signal, "SIGKILL",
+    `a worker that ignored SIGTERM exited as ${JSON.stringify(exit)} rather than being ended`);
+  assert(elapsedMs < 5_000,
+    `the supervisor waited ${elapsedMs}ms on a worker that was never going to exit`);
+
+  // ANTI-VACUITY: the same helper leaves a cooperative worker alone to exit on its own, so
+  // the SIGKILL above is the stubborn case and not what every teardown does.
+  const willing = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 50);"], { stdio: "ignore" });
+  const willingCompletion = new Promise((resolve) => {
+    willing.on("exit", (code, signal) => resolve({ code, signal }));
+  });
+  const willingExit = await endWorker(willing, willingCompletion);
+  assert.equal(willingExit.signal, "SIGTERM",
+    `a cooperative worker exited as ${JSON.stringify(willingExit)} rather than on the first signal`);
+
+  checks.aKilledSupervisorStillWritesTheCandidateReport = true;
+}
+
+// GATE 58 - the wall clock is reported beside the ledger that confounds it.
+//
+// A run's wall clock is not its provider latency. Every turn derives over the whole
+// session, so a session that grows faster than the work does buys wall time nothing
+// charged for. sol-20260812 rep 9's pifold arm wrote 309 state entries totalling 21.6MB,
+// 68.0% of a 31.9MB session, against 0.93MB of projection actually sent, and held 98% of a
+// core for 118 minutes while the native arm spent 24 seconds of CPU. `wallClockMs` alone
+// could not tell that apart from folding being slow, and every wall-clock figure recorded
+// before the state delta was fixed measured it.
+//
+// The lens reports and does not judge. There is no threshold, because the honest bound is
+// the comparison between the two arms of one run and the native arm has no state entries
+// at all. Driven with fixtures rather than matched against source, so it is the arithmetic
+// under test.
+// ---------------------------------------------------------------------------
+{
+  const stateEntry = (data) => ({ type: "custom", customType: "pi-fold-active-context-state", data });
+  const ledger = sessionLedgerLens([
+    { type: "message", message: { role: "user", content: "x" } },
+    stateEntry({ revision: 1, briefs: { a: "b".repeat(100) }, pendingMarks: [] }),
+    stateEntry({ revision: 2, briefs: { a: "b".repeat(400) }, pendingMarks: [1, 2] }),
+    { type: "custom", customType: "pi-fold-active-context-fold-record", data: { fold: {} } },
+  ], 10_000);
+  assert.equal(ledger.stateEntries, 2, "the lens counted something other than the state entries");
+  assert.equal(ledger.sessionEntries, 4, "the lens lost entries that are not state");
+  assert(ledger.stateBytes > 500 && ledger.stateBytes < 10_000,
+    `state bytes came back as ${ledger.stateBytes}`);
+  assert.equal(ledger.stateShareOfSession, ledger.stateBytes / 10_000,
+    "the share is not the state bytes over the session bytes");
+  assert(ledger.largestStateEntryBytes > ledger.smallestStateEntryBytes,
+    "the lens reported no growth across two entries of different size");
+  // The field breakdown is the part that names the cause. Rep 9 was 81% briefs, and a
+  // reader who only sees a total has to go and find that out.
+  assert.equal(Object.keys(ledger.stateBytesByField)[0], "briefs",
+    `the widest field came back as ${JSON.stringify(Object.keys(ledger.stateBytesByField))}`);
+  // A run with no state entries at all is the native arm, and it must read as zero rather
+  // than as missing: the comparison between the arms is the whole point of the lens.
+  const bare = sessionLedgerLens([{ type: "message", message: {} }], 500);
+  assert.equal(bare.stateEntries, 0);
+  assert.equal(bare.stateBytes, 0);
+  assert.equal(bare.stateShareOfSession, 0);
+  assert.equal(bare.largestStateEntryBytes, null,
+    "an arm that wrote no state reported a largest entry");
+  assert.equal(sessionLedgerLens([], 0).stateShareOfSession, null,
+    "an empty session divided by zero instead of declining to answer");
+
+  const adjudicator = readFileSync(join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"), "utf8");
+  assert(/sessionLedger: sessionLedgerLens\(entries, statSync\(sessionFile\)\.size\)/.test(adjudicator),
+    "the adjudication report does not carry the ledger the wall clock is read against");
+
+  checks.theWallClockIsReportedBesideItsLedger = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 59 - the compaction trigger clears the fence, and Pi's default does not.
+//
+// `shouldCompact` fires at `contextTokens > contextWindow - reserveTokens` against the
+// DESCRIPTOR window. gpt-5.6-sol declares 272,000 and Pi's default reserve is 16,384, so
+// the default trigger is 255,616 while the run's serving budget is 251,520: the
+// projection fence is 4,096 tokens BELOW the trigger and always reaches the window first,
+// and a managed arm never sees the hook at all. sol-20260812 rep 9 measured exactly that,
+// six hours and zero compaction passes on the pifold arm against four on the native one.
+//
+// Harmless while the fold runtime carried its own occupancy trigger; fatal to one whose
+// only ordinary mutation point IS the boundary. The reserve is derived now, and this gate
+// pins BOTH halves: the derived trigger clears the fence margin, and Pi's default on this
+// descriptor does NOT, because a gate that only checks the derived value would pass just
+// as happily on a descriptor where the default was already fine and would never have
+// caught rep 9. The worker is checked for using the derived value rather than a literal.
+// ---------------------------------------------------------------------------
+{
+  const descriptorWindow = 272_000;
+  const servingBudgetTokens = 251_520;
+  const derived = compactionReserveTokens({
+    descriptorWindow, servingBudgetTokens, share: compactionTriggerShare("full"),
+  });
+  assert.equal(derived.triggerTokens, 201_216,
+    "the derived trigger is not the occupancy the retired thermostat committed at");
+  // EVERY MODE STATES A SHARE ITS OWN MASS CAN CROSS. A smoke on the full run's line
+  // reaches a tenth of it, crosses nothing, folds nothing, and reports a healthy managed
+  // arm that never exercised the path it exists to exercise, which is the failure this
+  // half prevents. The bound is the plan's own accumulated payload, not a number typed
+  // beside the share.
+  for (const mode of EXPERIMENT_MODES) {
+    const plan = EXPERIMENT_MODE_PLANS[mode];
+    const share = compactionTriggerShare(mode);
+    const modeDerived = compactionReserveTokens({ descriptorWindow, servingBudgetTokens, share });
+    // What the run actually accumulates, at the estimator the harness declares. Every
+    // stage is bound by the floor now that the exempt probe waves are gone.
+    const reachableTokens = Math.floor((plan.stageCount * plan.payloadFloorChars) / 4);
+    assert(modeDerived.triggerTokens < reachableTokens,
+      `mode ${mode} places its compaction trigger at ${modeDerived.triggerTokens} tokens, past ` +
+      `the ${reachableTokens} its own ${plan.stageCount} stages can accumulate at the payload ` +
+      "floor, so no run in that mode ever crosses a boundary");
+    // And it is not so low that the run spends itself crossing: at least two stages of
+    // payload have to land before the first crossing, or the first stage folds itself.
+    assert(modeDerived.triggerTokens > (2 * plan.payloadFloorChars) / 4,
+      `mode ${mode} crosses its compaction trigger inside the first two stages`);
+  }
+  assert.throws(() => compactionTriggerShare("no-such-mode"), /Unknown experiment mode/);
+  assert(derived.triggerTokens < servingBudgetTokens,
+    "the derived compaction trigger does not clear the serving budget");
+  assert(derived.headroomTokens >= PROJECTION_FENCE_MARGIN_SHARE * servingBudgetTokens,
+    "the derived trigger sits inside the fence margin");
+  // The half that makes it non-vacuous: Pi's own default on this descriptor is the
+  // rep-9 configuration, and the record says so rather than leaving it to be rederived.
+  assert.equal(derived.defaultTriggerTokens, descriptorWindow - PI_DEFAULT_COMPACTION_RESERVE_TOKENS);
+  assert.equal(derived.defaultTriggerClearsTheBudget, false,
+    "Pi's default already cleared the serving budget here, so this gate proves nothing " +
+    "and the rep-9 measurement it was written from cannot be reproduced");
+  // A trigger inside the fence margin is refused rather than accepted quietly, which is
+  // the failure mode a share tuned by hand would reach.
+  assert.throws(() => compactionReserveTokens({
+    descriptorWindow, servingBudgetTokens, share: 0.96,
+  }), /inside the fence margin/,
+  "a compaction trigger inside the fence margin was accepted");
+  assert.throws(() => compactionReserveTokens({
+    descriptorWindow: 150_000, servingBudgetTokens, share: compactionTriggerShare("full"),
+  }), /is under the/,
+  "a descriptor window under the trigger produced a negative reserve");
+  // And the worker takes the derived value rather than a literal, on both arms, and
+  // checks that Pi actually received it.
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  assert(/reserveTokens: compactionTrigger\.reserveTokens/.test(worker),
+    "the worker still pins a literal compaction reserve");
+  assert(!/reserveTokens: 16_384/.test(worker),
+    "the worker still carries Pi's default reserve, which is the rep-9 configuration");
+  assert(/settings\.reserveTokens === compactionTrigger\.reserveTokens/.test(worker),
+    "the worker does not check that its compaction trigger reached the session");
+
+  checks.theCompactionTriggerClearsTheFence = true;
+}
+
+// GATE 60 IS RETIRED (2026-08-25). Its subject was the forced compaction: `compact` aborts
+// the live turn as its first act, so every fence crossing ended the turn mid-tool-call and
+// ONLY the fenced arm was resumed past its own abort, with the stranded request and the
+// abandoned response each allowed exactly once per crossing. The fence is gone, and with it
+// the abort, the allowances and the resume. Pi compacts at its own turn boundary now, where
+// nothing is in flight to strand. Its number stays spent.
+
+// GATE 61 - both arms' out-of-band provider calls are counted, and the bill is read rather
+// than computed.
+//
+// `usage` is built from the provider ledger, and the ledger is written by the request hook.
+// Neither arm's out-of-band calls reach that hook, so both were invisible: native's
+// compaction summarizes the branch through its own request (every compaction window in
+// sol-20260814-fenced-full rep 1 held zero ledger records across 88 to 118 seconds), and
+// pi-fold's brief generator does the same one layer along. Rep 1 hid 1,586,200 fresh
+// generator tokens on one arm and 75,375 compaction tokens on the other, and the arm with
+// the larger hidden spend was the one the headline favoured. Reporting one and not the
+// other is what makes a comparison dishonest, so the gate drives BOTH shapes.
+//
+// Cost is read from the records Pi already wrote, so the long-context tier is inside it.
+// The crossing COUNT is separate and reported, because a declared serving budget decides
+// that exposure silently: luna-20260807 declared none, native drifted to 369,024 tokens and
+// crossed on 17 of 117 calls, and that surcharge was the entire cost result.
+// ---------------------------------------------------------------------------
+{
+  const compactionEntry = (input, output, cost) => ({
+    type: "compaction",
+    usage: { input, output, cacheRead: 0, cacheWrite: 0, reasoning: 1, totalTokens: input + output, cost: { total: cost } },
+  });
+  const briefEntry = (input, output, cost) => ({
+    type: "custom",
+    data: { kind: "context.brief", usage: { input, output, cacheRead: 0, totalTokens: input + output, costTotal: cost } },
+  });
+
+  // AN ARM THAT MAKES NEITHER KIND OF CALL REPORTS ZEROS, never nulls: "none" is a
+  // measurement here, and an absent field would read as "not looked for".
+  const quiet = outOfBandUsage([{ type: "message" }, { type: "custom", data: { kind: "context.fold" } }]);
+  assert.deepEqual(quiet.compaction, {
+    calls: 0, inputFresh: 0, cacheRead: 0, cacheWrite: 0, output: 0, reasoning: 0,
+    totalTokens: 0, costUsd: 0,
+  }, "an arm that never compacted reports something other than zero compaction spend");
+  assert.equal(quiet.totals.calls, 0, "a run with no out-of-band calls reports some");
+
+  const native = outOfBandUsage([
+    { type: "message" }, compactionEntry(8_306, 4_791, 0.18526), compactionEntry(23_468, 4_876, 0.26362),
+  ]);
+  assert.equal(native.compaction.calls, 2, "compaction entries are not counted as calls");
+  assert.equal(native.compaction.inputFresh, 31_774, "compaction input is not summed");
+  assert.equal(native.compaction.output, 9_667, "compaction OUTPUT is not summed, which is the billed token");
+  assert(Math.abs(native.compaction.costUsd - 0.44888) < 1e-9, "compaction cost is not summed");
+  assert.equal(native.briefGenerator.calls, 0, "a native run reports generator calls it never made");
+  assert.equal(native.totals.output, 9_667, "the totals do not carry what the split does");
+
+  const folded = outOfBandUsage([briefEntry(56_000, 1_100, 0.127), briefEntry(60_000, 1_200, 0.133)]);
+  assert.equal(folded.briefGenerator.calls, 2, "generator records are not counted as calls");
+  assert.equal(folded.briefGenerator.inputFresh, 116_000, "generator input is not summed");
+  assert.equal(folded.compaction.calls, 0, "a folding run reports compactions it never ran");
+  // A generator call that failed reports no usage and is still a call the run made, so the
+  // count stays joinable against the lane's own records.
+  const withFailure = outOfBandUsage([briefEntry(10, 1, 0.01), { type: "custom", data: { kind: "context.brief", outcome: "error" } }]);
+  assert.equal(withFailure.briefGenerator.calls, 2, "a generator call that reported no usage is not counted as a call");
+  assert.equal(withFailure.briefGenerator.inputFresh, 10, "a failed call invented usage it never reported");
+
+  // THE BILL, read from the same records the tokens are read from.
+  const response = (input, cacheRead, cost, cacheWrite = 0) => ({
+    kind: "provider-response", requestOrdinal: 0,
+    usage: cost === null
+      ? { input, cacheRead, cacheWrite }
+      : { input, cacheRead, cacheWrite, cost: { total: cost } },
+  });
+  const bill = billedCostFromLedger([
+    { kind: "provider-request", ordinal: 1, payloadChars: 10 },
+    response(1_000, 100_000, 0.5), response(2_000, 180_000, 4.81, 120_000),
+    response(3_000, 10_000, 0.25),
+  ]);
+  assert.equal(bill.messageCalls, 3, "the billed lens miscounts message calls");
+  assert(Math.abs(bill.messageCallsUsd - 5.56) < 1e-9, "billed cost is not summed from the records");
+  assert.equal(bill.longContextCalls, 1,
+    "a call whose prompt passed the long-context tier is not counted, so a surcharged run reads like a base-tier one");
+  assert.equal(bill.peakPromptTokens, 302_000,
+    "the peak prompt is not the largest fresh input plus cache read plus cache write");
+  assert.equal(bill.longContextTierPromptTokens, LONG_CONTEXT_TIER_PROMPT_TOKENS);
+  // A provider that stopped reporting cost must not read as a cheap run.
+  const partial = billedCostFromLedger([response(1, 1, 0.25), response(1, 1, null)]);
+  assert.equal(partial.callsWithoutCost, 1, "a response carrying no cost is absorbed silently");
+  assert(Math.abs(partial.messageCallsUsd - 0.25) < 1e-9, "a response with no cost invented one");
+
+  // AND THE REQUESTS THAT WERE BUILT AND NEVER ANSWERED, a bound and never a total.
+  const orphans = unansweredRequestsFromLedger([
+    { kind: "provider-request", ordinal: 1, payloadChars: 100 },
+    { kind: "provider-response", requestOrdinal: 1 },
+    { kind: "provider-request", ordinal: 2, payloadChars: 964_700 },
+    { kind: "provider-request", ordinal: 3, payloadChars: 942_853 },
+  ]);
+  assert.equal(orphans.count, 2, "a request that never produced a response is not reported");
+  assert.equal(orphans.projectedChars, 1_907_553, "the unanswered mass is not summed");
+  assert(/unknown/.test(orphans.billed),
+    "the unanswered requests claim to know what the provider charged, which the artifacts cannot say");
+  assert.equal(unansweredRequestsFromLedger([
+    { kind: "provider-request", ordinal: 1 }, { kind: "provider-response", requestOrdinal: 1 },
+  ]).count, 0, "a fully answered run reports unanswered requests");
+
+  // And the adjudicator reports all of it rather than computing a bill of its own.
+  assert(/outOfBand,/.test(adjudicator) && /totalUsd: billed\.messageCallsUsd \+ outOfBand\.totals\.costUsd/
+    .test(adjudicator), "the adjudicated report does not carry the out-of-band spend or the total bill");
+  assert(/unansweredRequests: unansweredRequestsFromLedger\(ledger\)/.test(adjudicator),
+    "the adjudicated report drops the requests that were built and never answered");
+
+  checks.bothArmsOutOfBandSpendAndTheBillAreReported = true;
+}
+
+// GATE 62 - no instruction surface tells the model it is being tested, and a plan that does
+// cannot be launched.
+//
+// The plan's existing anti-leak scan looks for probe ANSWERS in instructions. This is the
+// premise rather than the answers, and three surfaces carried it. It is not cosmetic: v3
+// measured the same shape from the other direction when sol's summarizer carried 20, 38 and
+// 54 code words verbatim through successive summaries because it could tell they mattered.
+// A model told it is about to be quizzed optimizes for the quiz, and native's compaction
+// summaries are exactly where that optimization would land.
+// ---------------------------------------------------------------------------
+{
+  // The three historical strings, by their own bytes.
+  for (const carrier of [
+    "Record the identifiers you will need later; you will be asked about them after many stages.",
+    "you may not get another delivery of these bytes",
+    "Those earlier bytes are not resent: recover them however you must.",
+    "Answer the following recall questions about material delivered EARLIER in this session.",
+    "You will be quizzed on this.",
+    "Your answers are graded.",
+    // Hoarding direction: the second-pass carriers, by their own bytes.
+    "Record the specific identifiers and line positions you will need later.",
+    "keep an exact working memory of the identifiers, paths and line positions you have seen",
+  ]) {
+    assert(testAwarenessLeaks(carrier).length > 0,
+      `the scan misses test-awareness framing: ${carrier.slice(0, 60)}`);
+  }
+  // AND IT DOES NOT FIRE ON THE WORK ITSELF. Stage instructions carry curl's own paths, and
+  // `tests/` is a directory in that repository, so a general search for "test" would refuse
+  // every plan the corpus can produce.
+  for (const clean of [
+    "Read every file delivered in this stage and build an accurate working model of what it does.",
+    "Files in this stage: tests/unit/unit1300.c, lib/ftplistparser.h.",
+    "Name every call, trait, type or route that crosses between the new files and that earlier material.",
+    "Before we carry on, can you tell me a few things about the work so far?",
+  ]) {
+    assert.deepEqual(testAwarenessLeaks(clean), [],
+      `the scan refuses ordinary working instructions: ${clean.slice(0, 60)}`);
+  }
+  assert.deepEqual(testAwarenessLeaks(undefined), [], "a stage with no deliverable breaks the scan");
+
+  // THE LIVE PLAN, not a fixture of one: every surface the model will actually read.
+  for (const stage of plan.stages) {
+    assert.deepEqual(testAwarenessLeaks(stage.instructions), [],
+      `stage ${stage.ordinal} instructions tell the model it is being tested`);
+    assert.deepEqual(testAwarenessLeaks(stage.deliverable?.instructions), [],
+      `stage ${stage.ordinal} deliverable tells the model it is being tested`);
+  }
+
+  // AND THE PLAN IS REFUSED rather than merely reported, so a reworded instruction cannot
+  // reach a six-hour run.
+  const poisoned = JSON.parse(JSON.stringify(plan));
+  poisoned.stages[0].instructions += " You will be asked about them later.";
+  assert.throws(() => validateStagePlan(poisoned), /tells the model it is being tested/,
+    "a plan carrying the test premise still validates, so it could be launched");
+
+  // The staging source no longer builds any of it.
+  const staging = readFileSync(join(PROJECT, "scripts", "stage_pi_context_experiment.mjs"), "utf8");
+  for (const gone of [
+    "you will be asked", "may not get another delivery", "are not\n    resent",
+    "recover them however you must", "Answer the following recall questions",
+  ]) {
+    assert(!staging.includes(gone), `the staging script still writes "${gone}"`);
+  }
+  // The working half of the instruction stays: dropping the premise must not drop
+  // the task. What survives is the ASSIGNMENT, not a memory strategy.
+  assert(staging.includes("build an accurate working") &&
+    staging.includes("model of what they do, what they depend on, and which names they export"),
+  "the reading task was dropped along with the hoarding direction");
+
+  // THE PROTOCOL VOCABULARY (Shane, 2026-08-25). Everything above looks for a plan that
+  // SAYS it is a test. This looks for one SHAPED like a test, which is the leak that got
+  // past every assertion here and ran for 49 minutes: sol-20260825-readfull's 64
+  // instructions said "stage" 218 times, "code word" 102 times and "AUDIT TRACE" 24 times,
+  // and native's compaction summary came back indexed as "Stage NN analyzed ..." with every
+  // code word and trace answer under a "Critical Context" heading. Driven as a function so
+  // the laws are exercised rather than matched, and proved BOTH ways: the exact wording
+  // this builder used to emit is caught, and the wording it emits now is clean.
+  for (const [was, why] of [
+    ["Files in this stage: lib/a.c, lib/b.c.", "the old read instruction's own closing sentence"],
+    ["Read the new files below and CROSS-REFERENCE them against material you already worked" +
+      " through earlier in this session, specifically stage 2 (lib/a.c).", "the old revisit instruction"],
+    ["It MUST cite concrete facts first seen in stage 2 and stage 4.", "the old deliverable"],
+    ["AUDIT TRACE trace-a, step 02: name the 2nd file assigned by the stage you recorded" +
+      " as trace-a-01.", "an audit trace step"],
+    ["Audit note: the code word for stage 03 is cw-d48ca8.", "a code word note"],
+    ["Record it on its own line as `trace-a-02: <repository-relative path>`.", "the recording directive"],
+  ]) {
+    assert(protocolVocabularyLeaks(was).length > 0,
+      `the vocabulary scan misses ${why}, so it would have passed the run that caused it`);
+  }
+  // A real path carrying one of these words is not a leak: curl ships
+  // docs/cmdline-opts/trace-ascii.md and junk-session-cookies.md, and a scan that refused
+  // them is a scan that gets switched off. The paths are stripped before the text is read.
+  assert.deepEqual(protocolVocabularyLeaks(
+    "Read these files: docs/cmdline-opts/trace-ascii.md, docs/cmdline-opts/junk-session-cookies.md.",
+    ["docs/cmdline-opts/trace-ascii.md", "docs/cmdline-opts/junk-session-cookies.md"]), [],
+  "the vocabulary scan refuses a real repository path");
+  // And the wording the builder emits NOW, read out of the source rather than restated.
+  for (const name of ["readInstruction", "revisitInstruction", "deliverableInstruction"]) {
+    const body = new RegExp(`function ${name}\\([^)]*\\) \\{\\n  return \\[\\n([\\s\\S]*?)\\n  \\]`).exec(staging);
+    assert(body, `the sweep cannot read ${name}, so it is scanning nothing`);
+    // Read in the order that makes the scan mean what it says. COMMENTS GO FIRST: the
+    // comment above each of these functions quotes the wording it replaced, on purpose, and
+    // a scan that reads them is satisfied by deleting the explanation instead of the
+    // instruction. That is gate 116's lesson and it has now cost two builds. Interpolations
+    // go next, because `${stage.repoKey}` is code and the parameter is named `stage`. What
+    // is left is the text the model actually receives.
+    const source = body[1].split("\n").filter((line) => !line.trim().startsWith("//")).join("\n")
+      .replace(/\$\{[^}]*\}/g, " ");
+    const quoted = [...source.matchAll(/[`"]([^`"]{10,})[`"]/g)].map((match) => match[1]).join(" ");
+    assert(quoted.length > 0, `${name} has no quoted text to scan`);
+    assert.deepEqual(protocolVocabularyLeaks(quoted), [],
+      `${name} still carries protocol vocabulary`);
+  }
+  // Scoped to the function BODY: the comment above it quotes the removed line on
+  // purpose, and a scan of the whole file would be satisfied by deleting the
+  // explanation rather than the instruction.
+  const readBody = /function readInstruction\(stage, files\) \{\n  return \[\n([\s\S]*?)\n  \]/.exec(staging);
+  assert(readBody, "the sweep cannot read readInstruction, so it is scanning nothing");
+  assert.deepEqual(testAwarenessLeaks(readBody[1]), [],
+    "the read instruction still tells the model what to hoard");
+  // THE PROBE INSTRUCTION IS GONE, not merely cleaned. It opened the four question blocks
+  // with "Put each answer on its own line as `<probe-id>: <answer>`", which no amount of
+  // conversational framing stops being a quiz. Scanned by absence: a builder that brings
+  // the function back fails here.
+  assert(!/function probeInstruction\(/.test(staging),
+    "the staging script still writes a probe instruction");
+  assert(!/<probe-id>/.test(staging),
+    "the staging script still names the probe id format the model was asked to answer in");
+  // THE RENDERED PAYLOAD, not only the sources that feed it. `stagePayloadText` adds a
+  // header of its own, which is how `STAGE 16 / probe` and the explicit recall frame
+  // `QUESTIONS (answer each from what you already know; cite where you learned it):`
+  // survived every earlier sweep: neither string exists in the staging script or in any
+  // prompt, so scanning those alone could never have found them. Scanned on the shape that
+  // carries the most furniture, a probe stage, and on a plain one beside it.
+  for (const stage of [
+    plan.stages.find((entry) => entry.kind === "probe"),
+    plan.stages.find((entry) => entry.kind !== "probe"),
+  ]) {
+    assert(stage, "the plan offers no stage of this kind, so the payload sweep is scanning nothing");
+    const sealedShape = plan.stages.some((entry) => entry.codeWord !== null || entry.kind === "probe");
+    const rendered = stagePayloadText(visibleStage(stage));
+    assert(rendered.length > 0, "the rendered payload is empty, so the sweep is scanning nothing");
+    assert.deepEqual(testAwarenessLeaks(rendered), [],
+      `the rendered ${stage.kind} payload tells the model it is being tested or what to hoard`);
+    assert(!/^STAGE \d/m.test(rendered),
+      "the rendered payload still announces a numbered protocol stage");
+    // AND THE VOCABULARY SCAN, ON THE RENDERED BYTES. This sweep ran `testAwarenessLeaks`
+    // alone, which is how `DELIVERABLE deliverable-16:` survived the 2026-08-25 de-priming
+    // for an hour: the renderer concatenates the label and the id downstream of every scan
+    // `validateStagePlan` performs, so a plan whose `instructions` are provably clean still
+    // rendered a protocol label and an ordinal-encoding id into the model's context four
+    // times a run. Scanning the RENDERED payload is the only place that can catch a leak the
+    // renderer itself introduces. Sealed-shape stages are exempt, as everywhere else.
+    // Exempt on the plan's OWN SHAPE, the same rule `validateStagePlan` applies: this
+    // fixture is a SEALED-shape plan carrying code words and audit traces, and its payload
+    // renders them because it was built to. What must be clean is the renderer's own
+    // additions, which the standalone check below pins directly.
+    if (!sealedShape) {
+      assert.deepEqual(protocolVocabularyLeaks(rendered, stage.files.map((file) => file.path)), [],
+        "the rendered payload carries protocol vocabulary the plan-side scan cannot see");
+    }
+  }
+  // The pre-fix proof: the exact string the renderer used to emit is caught by the scan this
+  // sweep now runs, so an empty result above means something.
+  assert(protocolVocabularyLeaks(
+    "DELIVERABLE deliverable-16: Reply with a short structured note.").length > 0,
+  "the rendered-payload sweep would not have caught the label it was added for");
+  // And the renderer adds NOTHING of its own: a current-shape stage whose instructions and
+  // deliverable are clean must render clean, which is the property the sealed fixture above
+  // cannot demonstrate. Driven through the real renderer, not asserted over source.
+  const cleanStage = {
+    ...visibleStage(plan.stages.find((entry) => entry.kind !== "probe" && entry.deliverable)),
+    instructions: "Read these files from the curl checkout at /work: lib/a.c, lib/b.c.",
+    probes: [],
+    deliverable: { id: "deliverable-16", instructions: "Reply with a short structured note." },
+  };
+  assert.deepEqual(protocolVocabularyLeaks(stagePayloadText(cleanStage)), [],
+    "the renderer injects protocol vocabulary into a payload whose plan text is clean");
+
+  // A guess is not evidence of recall. Inviting one turned pi-fold's lost stage-15
+  // code word into a confident cw-509a30 that exists nowhere in the plan, and the
+  // run then found its own invention on a later search.
+  assert(!/even if you are not certain/.test(staging),
+    "the staging script still licenses a guess over a check");
+
+  // EVERY MODEL-FACING SURFACE THE WORKER BUILDS, not just the plan's. The system
+  // prompt reaches more requests than any stage instruction and was never scanned,
+  // which is how "keep an exact working memory of the identifiers, paths and line
+  // positions you have seen" survived the first pass.
+  const worker = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  // THE WORKER BUILDS EXACTLY ONE MODEL-FACING SURFACE NOW. The workload prompt and the
+  // resume prompt are both deleted (2026-08-25): stage 1 is simply the first user message,
+  // and turns end after every stage, so there is nothing to introduce and nothing to nudge.
+  // Between them they carried the delivery protocol, a stage total, a progress checkpoint
+  // and an owed closing synthesis, which is most of what this gate was written to catch.
+  for (const [name, pattern] of [
+    ["workloadSystemPrompt", /function workloadSystemPrompt\(\) \{\n  return \[\n([\s\S]*?)\n  \]/],
+  ]) {
+    const found = pattern.exec(worker);
+    assert(found, `the sweep cannot read ${name}, so it is scanning nothing`);
+    assert.deepEqual(testAwarenessLeaks(found[1]), [],
+      `${name} tells the model it is being tested or what to hoard`);
+  }
+  assert(!/function workloadPrompt\(|function resumePrompt\(/.test(worker),
+    "the worker still builds a workload or resume prompt, which v5 deleted");
+  assert(!/keep an exact working memory/.test(worker),
+    "the worker still directs the model's memory strategy");
+
+  checks.noInstructionTellsTheModelItIsBeingTested = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 63 - the transcript-search tool is WITHDRAWN, and each arm carries only
+// its shipped mechanism.
+//
+// The tool ran in exactly one sealed campaign, sol-20260814-traps, and measured
+// itself: Pi's compaction summary preserves answered probes as a completed-work
+// checklist, so the native arm re-read its own answers rather than exercising
+// compaction, and its one genuine dig cost six refining queries. An arm holding
+// an exact archive search is not a bytes-abandoned baseline (both external
+// reviews, 2026-08-14). The tool name stays exported because the wave-recovery
+// lens reads it out of sealed transcripts, where the searches really happened.
+// ---------------------------------------------------------------------------
+{
+  // The ledger tool is arm-SYMMETRIC: both arms carry the identical workload
+  // surface, so its presence changes nothing about this gate's law that no arm
+  // holds a recovery mechanism the other lacks.
+  // THE SURFACE IS STOCK PI (Shane 2026-08-21), read off Pi's own tool registry
+  // rather than restated here, so an upgrade that ships an eighth tool fails this
+  // gate instead of quietly reintroducing a subtraction.
+  // Read off Pi by CALLING the factory a stock session calls, not by scanning the
+  // tools directory. The directory holds grep, find and ls too, and scanning it is
+  // how the first pass got this wrong: those three exist in the SDK and no stock
+  // session has them, so a smoke run discovered four tools against an expected
+  // seven and refused to start.
+  const { createCodingTools } = await import(
+    pathToFileURL(join(PI_INSTALL_ROOT, "dist", "index.js")).href);
+  const stockSession = createCodingTools(PROJECT).map((tool) => tool.name).sort();
+  assert.deepEqual([...PI_STOCK_TOOLS].sort(), stockSession,
+    "the arms no longer carry exactly what a stock Pi session ships");
+  // ZERO HARNESS TOOLS. There were three and now there are none: the transcript search was
+  // withdrawn 2026-08-14 for measuring itself, `ledger_record` was deleted 2026-08-25
+  // because a tool saying "Record the result" tells the model continuously what the graded
+  // activity is, and `repo_stage` went the same day with pull-based delivery. Stages arrive
+  // as ordinary user messages, so the run has no protocol surface at all and the arms carry
+  // exactly what a real session carries.
+  assert.deepEqual([...EXPERIMENT_ALLOWED_TOOLS], [...PI_STOCK_TOOLS],
+    "the surface is stock Pi and nothing else");
+  assert(!EXPERIMENT_ALLOWED_TOOLS.includes(EXPERIMENT_TOOL_NAME),
+    "the delivery tool is permitted again, so the model can be asked to hold a key");
+  const workerSurface = readFileSync(
+    join(PROJECT, "scripts", "run_pi_context_experiment_worker.mjs"), "utf8");
+  assert(/experiment\.deliverStage\(\)/.test(workerSurface) &&
+    /await session\.prompt\(served\.text/.test(workerSurface),
+  "the worker does not deliver stages as user messages, so something else still does");
+  assert(!EXPERIMENT_ALLOWED_TOOLS.includes(EXPERIMENT_LEDGER_TOOL_NAME),
+    "the deleted record tool is permitted again");
+  const extensionSurface = readFileSync(
+    join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"), "utf8");
+  assert(!extensionSurface.includes("Record the result of an assigned ledger task"),
+    "the extension still registers a tool that tells the model to record results");
+  // The law this gate protects is SYMMETRY, not scarcity: no arm may hold a
+  // recovery mechanism the other lacks. Restoring six tools to BOTH arms keeps it.
+  assert(EXPERIMENT_ALLOWED_TOOLS.includes("bash"),
+    "the arms cannot page a transcript line over Pi's 50 KiB read cap");
+  assert(!EXPERIMENT_PIFOLD_EXTRA_TOOLS.includes(EXPERIMENT_HISTORY_TOOL_NAME),
+    "the history tool came back as an arm-specific extra");
+  assert.equal(EXPERIMENT_HISTORY_TOOL_NAME, "session_history",
+    "the lens constant drifted, so sealed runs' searches would stop being readable");
+  const extension = readFileSync(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"), "utf8");
+  assert(!extension.includes("EXPERIMENT_HISTORY_TOOL_NAME,") ||
+    !/registerTool\(\{\s*name: EXPERIMENT_HISTORY_TOOL_NAME/.test(extension),
+  "the extension still registers the transcript-search tool");
+  assert(!/searchSessionHistory/.test(extension),
+    "the extension still carries the search implementation");
+  const staging = readFileSync(join(PROJECT, "scripts", "stage_pi_context_experiment.mjs"), "utf8");
+  assert(!staging.includes("session_history"),
+    "a stage instruction names the withdrawn tool");
+  checks.eachArmCarriesOnlyItsShippedMechanism = true;
+}
+// GATE 64 - the serving budget is a declared BASIS, and an arm that needs one cannot run
+// without it.
+//
+// Declaring 251,520 is the descriptor window less Pi's reserve, and it caps both arms below
+// the provider's 272,000 long-context tier by construction. luna-20260807 (Sol throughout;
+// the campaign name is only a label) predates the constant: native drifted to 369,024 and
+// was billed the surcharge on 17 of 117 calls at $20.99, while folding held pi-fold at
+// 236,861 so it never left the base tier at $13.89. That surcharge was the whole cost
+// result, and declaring a budget designs it out, which is how sol-20260814-fenced-full came
+// back the other way at $20.88 to $13.74. Neither basis is wrong. Running one and reporting
+// the other would be, so the basis is stated at launch and recorded in the manifest.
+// ---------------------------------------------------------------------------
+{
+  const runner = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment.mjs"), "utf8");
+  assert(/--provider-input-budget/.test(runner), "the run cannot declare its own basis");
+  assert(/requestedBudget === null \|\| requestedBudget === "none"/.test(runner),
+    "the budget is settable to an arbitrary number, which makes it a tuning dial rather than a basis");
+  // The matched-fence precondition went with the arm: nothing fences against the budget any
+  // more, so a declared basis is a measurement basis only, and no arm requires one to run.
+  assert(!/nativefence/.test(runner),
+    "the supervisor still knows how to launch the retired matched-fence arm");
+  // The declared value still comes from the model pin and never from the flag: the flag can
+  // only say "none", so a run cannot quietly serve a budget no deployment would have.
+  assert(/EXPERIMENT_PROVIDER_INPUT_BUDGETS\[`\$\{modelProvider\}\/\$\{modelId\}`\]/.test(runner),
+    "the declared budget stopped coming from the model pin");
+
+  const launcher = readFileSync(join(PROJECT, "scripts", "launch_pi_context_experiment.sh"), "utf8");
+  assert(/--provider-input-budget\)/.test(launcher) && /BUDGET_ARGS/.test(launcher),
+    "the launcher cannot pass the basis through, so it could only be set by hand");
+  assert(/none\) BUDGET_ARGS="--provider-input-budget none";; \*\)/.test(launcher),
+    "the launcher accepts a basis it cannot mean");
+
+  checks.theServingBudgetIsADeclaredBasis = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 65 - a code word that was WITHDRAWN and replaced, which is the case a
+// single search gets wrong.
+//
+// searchSessionHistory returns the EARLIEST matches first, so one query on
+// "code word for stage NN" surfaces the withdrawn value before its replacement.
+// That is the exact query the native arm used to win probe-32-04 in
+// sol-20260814-deployment, so this trap is aimed at the strategy that actually
+// won rather than at a hypothetical one. The gate proves the trap TRAPS (a
+// first-hit reader lands on the stale value), that both waves are measured (one
+// carrier withdrawn, one standing), and that the asking does not give it away:
+// the question is byte-identical either way, so the agent cannot tell a trapped
+// carrier from a clean one by reading the question.
+// ---------------------------------------------------------------------------
+{
+  const words = stageCodeWords("reissue-fixture", 8);
+  const replacements = stageCodeWordReissues("reissue-fixture", 8);
+  assert.equal(new Set([...words, ...replacements]).size, 16,
+    "originals and replacements share a value, so a probe would have two right answers");
+  // Stage 1's word is withdrawn at stage 3; stage 2's stands.
+  const carriers = [
+    { ordinal: 1, kind: "read", codeWord: words[0], codeWordReissue: null },
+    { ordinal: 2, kind: "read", codeWord: words[1], codeWordReissue: null },
+    { ordinal: 3, kind: "read", codeWord: words[2],
+      codeWordReissue: { stage: 1, codeWord: replacements[0] } },
+    { ordinal: 4, kind: "probe", codeWord: null, codeWordReissue: null },
+  ];
+  assert.equal(effectiveCodeWord(carriers, 1), replacements[0]);
+  assert.equal(effectiveCodeWord(carriers, 2), words[1]);
+  assert.notEqual(effectiveCodeWord(carriers, 1), words[0]);
+  assert.equal(reissueAnnouncedAt(carriers, 1), 3);
+  assert.equal(reissueAnnouncedAt(carriers, 2), null);
+
+  // THE TRAP ITSELF. Both sentences answer the same text query, and the one an
+  // earliest-first reading meets carries the withdrawn value alone: any naive
+  // recovery over the raw transcript (a text search, a skim from the top) lands
+  // on the stale value by construction, while chronological summarization must
+  // carry the correction. The properties are asserted on the sentences
+  // themselves, since the sentences are what any reader reads.
+  const original = codeWordSentence(1, words[0]);
+  const withdrawal = codeWordReissueSentence(1, replacements[0]);
+  const phrase = "code word for stage 01";
+  assert(original.includes(phrase) && withdrawal.includes(phrase),
+    "the withdrawal must answer the same text query as the original, or it is not a trap");
+  assert(original.includes(words[0]) && !original.includes(replacements[0]),
+    "the earliest-met sentence already carries the correction, so the trap is vacuous");
+  assert(withdrawal.includes(replacements[0]) && !withdrawal.includes(words[0]),
+    "the correction does not carry the live value alone, so order stops mattering");
+
+  // WHICH VALUE IS LIVE. The wave-selection half of this gate drove
+  // `buildConversationProbes`, which was deleted with the probe waves on 2026-08-25; the
+  // trap it protected is untouched, because what the run is held to is `effectiveCodeWord`,
+  // and that is the function the plan validator reads on every carrier. Driven directly:
+  // a withdrawn carrier resolves to the REPLACEMENT and never to the word it replaced, a
+  // standing carrier resolves to its own word, and a stage that merely ANNOUNCES someone
+  // else's withdrawal is itself untrapped.
+  const trappedStage = 1;
+  assert.equal(reissueAnnouncedAt(carriers, trappedStage) !== null, true,
+    "stage 01 must be the withdrawn carrier, or the trap half of this gate is vacuous");
+  assert.equal(effectiveCodeWord(carriers, trappedStage), replacements[0]);
+  assert.notEqual(effectiveCodeWord(carriers, trappedStage), words[0]);
+  const standing = carriers.filter((stage) =>
+    stage.codeWord !== null && reissueAnnouncedAt(carriers, stage.ordinal) === null);
+  assert(standing.length > 0, "every carrier was withdrawn, so the standing cell is unmeasured");
+  for (const stage of standing) {
+    assert.equal(effectiveCodeWord(carriers, stage.ordinal), words[stage.ordinal - 1],
+      `stage ${stage.ordinal} stands, so its own word is the live one`);
+  }
+  // The announcer carries someone else's correction and its OWN word still stands: this is
+  // the case a naive "any stage mentioned in a reissue sentence is trapped" reading gets
+  // wrong, and it is why the withdrawal is read from the announcement's SUBJECT.
+  const announcer = carriers.find((stage) => stage.codeWordReissue !== null);
+  assert(announcer, "no carrier announces a withdrawal, so the announcer cell is unmeasured");
+  assert.notEqual(announcer.ordinal, trappedStage);
+  assert.equal(effectiveCodeWord(carriers, announcer.ordinal), words[announcer.ordinal - 1]);
+
+  // Plan laws. Every mutation below was run against the unmutated plan first, so
+  // none of these assertions passes by accident of an unrelated failure.
+  const reseal = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  const carrierIndex = plan.stages.findIndex((stage) => stage.kind !== "probe");
+  const announcerIndex = plan.stages.findIndex((stage) => stage.kind !== "probe" &&
+    stage.ordinal > plan.stages[carrierIndex].ordinal);
+  const carrierOrdinal = plan.stages[carrierIndex].ordinal;
+  // The unmutated plan validates, which is what makes each throw below attributable.
+  validateStagePlan(reseal(structuredClone(plan)));
+  // A withdrawal must name an EARLIER stage.
+  assert.throws(() => {
+    const bad = structuredClone(plan);
+    bad.stages[announcerIndex].codeWordReissue =
+      { stage: bad.stages[announcerIndex].ordinal, codeWord: replacements[5] };
+    validateStagePlan(reseal(bad));
+  }, /reissues a stage that is not earlier/);
+  // A withdrawal that changes nothing is not a withdrawal.
+  assert.throws(() => {
+    const bad = structuredClone(plan);
+    const unchanged = bad.stages[carrierIndex].codeWord;
+    bad.stages[announcerIndex].codeWordReissue = { stage: carrierOrdinal, codeWord: unchanged };
+    bad.stages[announcerIndex].instructions +=
+      ` ${codeWordReissueSentence(carrierOrdinal, unchanged)}`;
+    validateStagePlan(reseal(bad));
+  }, /malformed, unchanged, or repeated/);
+  // A withdrawal the agent was never shown cannot be recalled.
+  assert.throws(() => {
+    const bad = structuredClone(plan);
+    bad.stages[announcerIndex].codeWordReissue =
+      { stage: carrierOrdinal, codeWord: replacements[5] };
+    validateStagePlan(reseal(bad));
+  }, /does not carry its reissue sentence/);
+  // A stage-fact probe expecting the WITHDRAWN value is the defect this whole
+  // mechanism exists to make impossible.
+  assert.throws(() => {
+    const bad = structuredClone(plan);
+    const wave = bad.stages.find((stage) => stage.probes.some((probe) => probe.kind === "stage-fact"));
+    const probe = wave.probes.find((candidate) => candidate.kind === "stage-fact");
+    const target = bad.stages[probe.sourceStage - 1];
+    const announcer = bad.stages.find((stage) => stage.kind !== "probe" &&
+      stage.ordinal > target.ordinal && stage.ordinal < wave.ordinal);
+    assert(announcer, "smoke fixture has no stage between the carrier and its wave");
+    announcer.codeWordReissue = { stage: target.ordinal, codeWord: replacements[6] };
+    announcer.instructions += ` ${codeWordReissueSentence(target.ordinal, replacements[6])}`;
+    validateStagePlan(reseal(bad));
+  }, /disagrees with carrier/);
+  checks.aWithdrawnCodeWordTrapsAFirstHitSearch = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 66 - a wave that cost nothing to answer says so.
+//
+// The probe score alone hides which waves were free. In sol-20260814-deployment
+// the native arm compacted at entries 99, 250, 329 and 457 while the waves
+// landed at 91, 236, 321 and 470, so wave 16 was answered with NO compaction yet
+// and stages 1-15 entirely raw. Occupancy is emergent and a static plan cannot
+// schedule a wave to land after a reset, so the instrument reports the condition
+// instead of pretending to control it. The same lens caught the other arm's
+// failure from the opposite side: pifold answered wave 32 with zero recovery
+// calls and lost both of its probes there, which is the shape of a guess.
+// ---------------------------------------------------------------------------
+{
+  const entryAt = (index) => ({ id: `e${index}`, type: "message" });
+  const toolResult = (toolName) => ({ type: "message", message: { role: "toolResult", toolName } });
+  const entries = [
+    toolResult(EXPERIMENT_TOOL_NAME),          // 0: wave one delivered
+    toolResult("read"),                        // 1
+    entryAt(2),                                // 2: wave one answered
+    { type: "compaction" },                    // 3: the reset
+    toolResult(EXPERIMENT_TOOL_NAME),          // 4: wave two delivered
+    toolResult(EXPERIMENT_HISTORY_TOOL_NAME),  // 5
+    toolResult(EXPERIMENT_HISTORY_TOOL_NAME),  // 6
+    toolResult("pi_fold_context"),             // 7
+    toolResult(EXPERIMENT_TOOL_NAME),          // 8: another stage, never recovery
+    entryAt(9),                                // 9: wave two answered
+  ];
+  const transcripts = [
+    { stage: 16, resultEntryIndex: 0, answerEntryIndex: 2 },
+    { stage: 32, resultEntryIndex: 4, answerEntryIndex: 9 },
+  ];
+  const rows = probeWaveRecovery({ entries, transcripts });
+  assert.equal(rows.length, 2);
+  // THE FREE WAVE: nothing had reset yet, which is reported as null rather than
+  // as a large distance that would read like the opposite.
+  assert.equal(rows[0].lastResetKind, null);
+  assert.equal(rows[0].entriesSinceReset, null);
+  assert.equal(rows[0].fileReads, 1);
+  assert.equal(rows[0].recoveryCalls, 1);
+  // THE DUG WAVE, and the stage tool is never counted as recovery: asking for
+  // the next stage is the workload, not an attempt to recover anything.
+  assert.equal(rows[1].lastResetKind, "compaction");
+  assert.equal(rows[1].entriesSinceReset, 1);
+  assert.equal(rows[1].historySearches, 2);
+  assert.equal(rows[1].contextToolCalls, 1);
+  assert.equal(rows[1].fileReads, 0);
+  assert.equal(rows[1].recoveryCalls, 3);
+  // A committed fold epoch is the pifold arm's reset, so both arms report against
+  // the same column rather than one of them reporting nothing.
+  const folded = [
+    { type: "custom", customType: `acme-${CONTEXT_EVENT_SUFFIX}`, data: { kind: "context.commit" } },
+    toolResult(EXPERIMENT_TOOL_NAME),
+    entryAt(2),
+  ];
+  const foldedRows = probeWaveRecovery({
+    entries: folded, transcripts: [{ stage: 16, resultEntryIndex: 1, answerEntryIndex: 2 }],
+  });
+  assert.equal(foldedRows[0].lastResetKind, "commit");
+  assert.equal(foldedRows[0].entriesSinceReset, 1);
+  // ZERO RECOVERY IS REPORTABLE, which is the pifold wave-32 shape.
+  assert.equal(foldedRows[0].recoveryCalls, 0);
+  // An undelivered wave reports as such rather than throwing or scoring zero work.
+  const missing = probeWaveRecovery({
+    entries, transcripts: [{ stage: 48, resultEntryIndex: null, answerEntryIndex: null }],
+  });
+  assert.equal(missing[0].delivered, false);
+  // The adjudicator actually reports it, or the lens is dead code.
+  const grader = readFileSync(join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"), "utf8");
+  assert(/probeWaveRecovery\(\{ entries: runEntries, transcripts: probes \}\)/.test(grader) &&
+    /^\s*waveRecovery,$/m.test(grader),
+  "the wave-recovery lens is computed but never reported");
+  checks.aWaveThatCostNothingToAnswerSaysSo = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 67 - a read that leaves the checkout is refused, and containment is the
+// RESOLVED path.
+//
+// Pi's read tool applies no containment of its own: resolveReadPathAsync
+// resolves against cwd and reads whatever exists. The corpus sweep (2026-08-14,
+// one predicate over every sealed run) found 10 runs that used it: 313 escaping
+// reads, 178 returning content, 14 results across 5 runs carrying the plan's own
+// expectedAnswer, every one on a native or nativefence arm. sol-20260812
+// native-rep9 is the proof of use: /proc/self/cmdline to run-config.json to
+// stages-full.json, then probe-64-06 answered verbatim off the key with a false
+// provenance sentence. Zero pifold runs ever left the checkout, so the
+// contamination inflated the arm pi-fold loses to.
+//
+// The judgment is containment, not spelling: ".." and absolute forms are also
+// how legitimate reads INSIDE the checkout arrive (60 such across two pifold
+// runs), so a string predicate is exactly wrong. And a blocked read is a
+// refusal the model can correct, not a run failure: it leaked nothing.
+//
+// The 2026-08-14 external review then held the gate to its own prose: "resolved
+// path" was proven only as normalized SPELLING, on a root that never existed.
+// The gate now drives a real filesystem: the judged target is canonical, a link
+// inside the checkout pointing outside is refused by where it LANDS, a
+// symlinked alias of the root itself still admits its own files, a path that
+// does not exist keeps the lexical verdict because it cannot leak, and a read
+// naming NO path is refused as missing rather than coerced to the root and
+// waved through, which was an allow on malformed input.
+// ---------------------------------------------------------------------------
+{
+  const ground = mkdtempSync(join(tmpdir(), "pi-context-experiment-containment-"));
+  const runDir = join(ground, "state", "campaign", "runs", "run-1");
+  const repoDir = join(runDir, "repo");
+  mkdirSync(join(repoDir, "lib", "vtls"), { recursive: true });
+  mkdirSync(join(repoDir, "notes"), { recursive: true });
+  mkdirSync(`${repoDir}-shadow`, { recursive: true });
+  writeFileSync(join(repoDir, "lib", "vtls", "gtls.h"), "struct gtls;\n");
+  writeFileSync(join(runDir, "run-config.json"), "{}\n");
+  writeFileSync(join(ground, "state", "campaign", "stages-full.json"), "{}\n");
+  writeFileSync(join(`${repoDir}-shadow`, "file.c"), "int shadow;\n");
+  symlinkSync(join(runDir, "run-config.json"), join(repoDir, "notes", "current"));
+  symlinkSync(join("..", "lib", "vtls", "gtls.h"), join(repoDir, "notes", "header"));
+  symlinkSync(repoDir, join(ground, "repo-alias"));
+  const inside = (path) => readEscapesCheckout(repoDir, path);
+  // Stays: relative, absolute-inside, dot-segments that resolve back inside,
+  // and the checkout root itself.
+  assert.equal(inside("lib/vtls/gtls.h").escapes, false);
+  assert.equal(inside(`${repoDir}/lib/vtls/gtls.h`).escapes, false);
+  assert.equal(inside("lib/../lib/vtls/gtls.h").escapes, false);
+  assert.equal(inside(".").escapes, false);
+  // Refused: every route the contaminated runs actually took.
+  assert.equal(inside("../run-config.json").escapes, true);
+  assert.equal(inside("../../../stages-full.json").escapes, true);
+  assert.equal(inside("/proc/self/cmdline").escapes, true);
+  assert.equal(inside("/opt/checkout-elsewhere/scripts/stage_pi_context_experiment.mjs").escapes, true);
+  // The sibling-prefix trap: a directory whose name merely STARTS with the
+  // checkout root is outside it, which is why the boundary is root + separator.
+  assert.equal(readEscapesCheckout(repoDir, `${repoDir}-shadow/file.c`).escapes, true);
+  // A link is judged by where it LANDS. The spelling "notes/current" never
+  // leaves the root; the filesystem object it names is the run configuration
+  // one level up, and that is what the verdict reports.
+  const followed = inside("notes/current");
+  assert.equal(followed.escapes, true);
+  assert.equal(followed.resolved, realpathSync.native(join(runDir, "run-config.json")));
+  assert.equal(followed.cause, "link-target");
+  // A link that lands inside stays readable, and so does the checkout reached
+  // through a symlinked alias of its own root: canonical against canonical.
+  assert.equal(inside("notes/header").escapes, false);
+  assert.equal(readEscapesCheckout(join(ground, "repo-alias"), "lib/vtls/gtls.h").escapes, false);
+  // A path that does not exist cannot leak and keeps the lexical verdict, in
+  // both directions.
+  assert.equal(inside("lib/never-written.c").escapes, false);
+  assert.equal(inside("../never-written.json").escapes, true);
+  // A read naming NO path is refused as missing, never coerced to the root.
+  for (const missing of [undefined, null, "", "   "]) {
+    const verdict = readEscapesCheckout(repoDir, missing);
+    assert.equal(verdict.escapes, true, "a pathless read was waved through");
+    assert.equal(verdict.resolved, null);
+    assert.equal(verdict.cause, "missing-path");
+  }
+  // The resolved path travels with the verdict so the artifact names what was
+  // actually judged, not what was typed.
+  assert.equal(inside("../run-config.json").resolved,
+    realpathSync.native(join(runDir, "run-config.json")));
+  assert.throws(() => readEscapesCheckout("relative/repo", "x"), /absolute checkout root/);
+  rmSync(ground, { recursive: true, force: true });
+  // And the extension enforces it on the read tool through THIS predicate, with
+  // the refusal correctable, the missing-path case named as its own correction,
+  // and the attempt recorded as its own event.
+  const extension = readFileSync(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"), "utf8");
+  assert(/readEscapesCheckout\(config\.repoDir, requested\)/.test(extension),
+    "the extension does not judge reads with the shared containment predicate");
+  assert(/read-escape-blocked/.test(extension),
+    "a blocked read leaves no event, so a probing run would be invisible");
+  // THE REFUSAL IS CORRECTABLE AND NAMES NOTHING (reworded 2026-08-25). It used to say "This
+  // run reads only files inside the repository checkout" and "This read named no path", which
+  // told the model, in text it could trigger on demand, that it was inside a managed RUN with
+  // a checkout the harness had fenced. A refusal is a model-visible surface, and the audit
+  // counted it as one. What the gate protects is the CORRECTABILITY, so it is pinned on the
+  // correction rather than on the old wording, and driven as a predicate below.
+  assert(/Give a path relative to the current directory/.test(extension),
+    "the refusal does not tell the model how to correct");
+  assert(/No path was given/.test(extension),
+    "a pathless read is not refused with its own correction");
+  // And the two refusals say nothing about the run, the harness or a protocol.
+  for (const refusal of [
+    "That path is outside the current directory. Give a path relative to the current directory.",
+    "No path was given. Give one path relative to the current directory.",
+    "The bash tool is not available here.",
+  ]) {
+    assert.deepEqual(protocolVocabularyLeaks(refusal), [],
+      `a refusal the model can trigger carries protocol vocabulary: ${refusal}`);
+    assert.deepEqual(testAwarenessLeaks(refusal), [],
+      `a refusal the model can trigger tells it it is being tested: ${refusal}`);
+  }
+  // The fence covers every tool whose containment can be judged from its arguments, not just
+  // `read`: `edit` and `write` were allowed and never checked.
+  assert(/PATH_FENCED_TOOLS = new Set\(\["read", "edit", "write"\]\)/.test(extension) &&
+    /PATH_FENCED_TOOLS\.has\(event\.toolName\)/.test(extension),
+  "the containment fence still judges one tool while three take a path");
+  assert(!/appendFailure\(config, "read-escape/.test(extension),
+    "a blocked read latches a failure, which turns a leak-free refusal into a dead six-hour run");
+  checks.aReadOutsideTheCheckoutIsRefusedByResolution = true;
+}
+
+// Gate 69 (2026-08-15): a fact's carriage is attributed at the answering request.
+//
+// The hidden-mass instrument stands on one primitive: for a fact string and a
+// provider request, say whether the fact rode the projection raw, rode it inside
+// a visible brief, sat one peek away, or was absent, with an absence that exists
+// on a dead branch named as the off-branch entries a native discard leaves. The
+// lens earned its gate on its first sealed sweep: rep 4's log entry claimed
+// three missed bindings were "recorded in channels briefs do not claim", and the
+// lens showed they were never recorded at all, in any format, in any channel.
+// The classification half is pure and driven here across every class; the
+// loader half composes the runtime's own materializeStatePersistence, exercised
+// on the no-state branch shape a native session presents, so an arm with no
+// fold records classifies raw-versus-absent through the same reading.
+{
+  const attribution = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_attribution.mjs")).href);
+  const entry = (id, parentId, message) => ({ type: "message", id, parentId, message, timestamp: 1 });
+  const entries = [
+    entry("e1", null, { role: "user", content: [{ type: "text", text: "the ask" }] }),
+    entry("e2", "e1", { role: "toolResult", content: [{ type: "text", text: "covered fact cov-123" }] }),
+    entry("e3", "e2", { role: "toolResult", content: [{ type: "text", text: "expanded fact exp-456" }] }),
+    entry("e4", "e3", {
+      role: "assistant",
+      content: [
+        { type: "text", text: "raw fact raw-789" },
+        { type: "toolCall", id: "c1", name: "submit", arguments: { row: "arg-fact-000" } },
+      ],
+    }),
+    { type: "custom", id: "x1", parentId: "e4", customType: "interleaved-record", data: {}, timestamp: 1 },
+    entry("e5", "x1", { role: "assistant", content: [{ type: "text", text: "probe-1: answered" }] }),
+    entry("e6", "e2", { role: "toolResult", content: [{ type: "text", text: "discarded fact dead-999" }] }),
+  ];
+  const branch = attribution.branchTo(entries, "e5");
+  assert.deepEqual(branch.map((item) => item.id), ["e1", "e2", "e3", "e4", "x1", "e5"],
+    "the branch walk does not follow the parent chain through interleaved records");
+  const view = {
+    branch,
+    visibleBriefs: [{ foldId: "F1", brief: "root brief carrying bf-111" }],
+    recoverableBriefs: [{ foldId: "F2", brief: "hidden child brief carrying cf-222" }],
+    coveredEntryIds: new Set(["e2", "e3"]),
+    visibleSourceEntryIds: new Set(["e3"]),
+  };
+  const classify = (fact) => attribution.classifyFactCarriage(view, fact).classification;
+  assert.equal(classify("cov-123"), "recoverable", "a folded source did not classify recoverable");
+  assert.equal(classify("exp-456"), "visible-raw", "an expanded fold's source did not classify raw");
+  assert.equal(classify("raw-789"), "visible-raw", "plain assistant text did not classify raw");
+  assert.equal(classify("arg-fact-000"), "visible-raw",
+    "a tool call argument did not count as projection bytes, which is the channel rep 4 recorded in");
+  assert.equal(classify("bf-111"), "visible-brief", "a visible root brief did not classify visible-brief");
+  assert.equal(classify("cf-222"), "recoverable",
+    "a hidden child brief classified as visible, so consolidation would hide nothing");
+  assert.equal(classify("zz-none"), "absent", "an unstated fact did not classify absent");
+  const detail = attribution.classifyFactCarriage(view, "cov-123");
+  assert.deepEqual(detail.recoverableSourceEntryIds, ["e2"], "the recoverable carrier is not named");
+  assert.equal(attribution.attributeFactInView({ view, entries, fact: "dead-999" }).classification,
+    "absent", "a prebuilt carriage view drifted from the session reading");
+  // The loader half on the native shape: no state records, so the runtime
+  // materializes an empty forest and everything on the branch reads raw, while
+  // a fact only on the dead fork is absent WITH its off-branch entries named.
+  const jitiPath = join(PROJECT, "node_modules", "jiti", "lib", "jiti.mjs");
+  assert(existsSync(jitiPath), "could not resolve package-local jiti for the attribution loader");
+  const { createJiti } = await import(pathToFileURL(jitiPath));
+  const runtimeForLens = await createJiti(import.meta.url)
+    .import(join(PROJECT, "extensions", "active-context.ts"));
+  // The nested projection is the case a flat expanded-ref set gets wrong. An
+  // expanded parent renders the collapsed CHILD PLACEHOLDER, not the child's
+  // raw source. Pin the runtime's rendered bytes first so the attribution
+  // assertions below cannot pass by inventing a different projection law.
+  const nestedSnapshotBase = runtimeForLens.mapActiveContext({
+    sessionId: "attribution-fixture",
+    eventMessages: branch.flatMap((item) => runtimeForLens.sessionEntryMessages(item)),
+    contextEntries: branch,
+    contextWindow: 100_000,
+    netBudget: true,
+  });
+  const nestedSnapshot = {
+    ...nestedSnapshotBase,
+    protectedIndices: new Set(),
+    toolProtectedIndices: new Set(),
+  };
+  const nestedRef = nestedSnapshot.mapped.find((item) => item.ref?.entryId === "e2")?.ref;
+  assert(nestedRef, "the nested attribution fixture did not map its source entry");
+  const childFold = {
+    id: "fold_attribution_child",
+    kind: "chapter",
+    parentId: "fold_attribution_parent",
+    parts: [{ kind: "raw", ref: nestedRef }],
+    brief: "Nested child brief carries nested-brief-333.",
+    provenance: { kind: "deterministic" },
+    sourceSha256: nestedRef.sha256,
+    sourceChars: 100,
+    placeholderChars: 50,
+    createdAt: 1,
+  };
+  const parentFold = {
+    id: "fold_attribution_parent",
+    kind: "consolidation",
+    parentId: null,
+    parts: [{ kind: "fold", foldId: childFold.id }],
+    brief: "Parent brief carries parent-brief-444.",
+    provenance: { kind: "deterministic" },
+    sourceSha256: nestedRef.sha256,
+    sourceChars: 100,
+    placeholderChars: 50,
+    createdAt: 2,
+  };
+  const nestedState = {
+    ...runtimeForLens.emptyActiveContextState("attribution-fixture"),
+    folds: [childFold, parentFold],
+    expanded: [parentFold.id],
+  };
+  const nestedProjection = JSON.stringify(
+    runtimeForLens.renderFold(parentFold, nestedState, nestedSnapshot));
+  assert(nestedProjection.includes("nested-brief-333"),
+    "the runtime did not render the collapsed child's brief under an expanded parent");
+  assert(!nestedProjection.includes("covered fact cov-123"),
+    "the runtime revealed a collapsed child's raw source under an expanded parent");
+  const nestedCarriers = attribution.projectionCarriers({
+    runtime: runtimeForLens, state: nestedState, snapshot: nestedSnapshot,
+  });
+  const nestedView = { branch, ...nestedCarriers };
+  assert.equal(attribution.classifyFactCarriage(nestedView, "nested-brief-333").classification,
+    "visible-brief", "a collapsed child under an expanded parent did not classify as a visible brief");
+  assert.equal(attribution.classifyFactCarriage(nestedView, "cov-123").classification,
+    "recoverable", "an expanded parent incorrectly made its collapsed child's source visible raw");
+  // Collapse the parent and only its own brief remains visible. This catches a
+  // second flat-walk failure: directFoldOwners maps evidence refs, not child
+  // fold ids, so it cannot be used to decide which folds are roots.
+  const collapsedCarriers = attribution.projectionCarriers({
+    runtime: runtimeForLens,
+    state: { ...nestedState, expanded: [] },
+    snapshot: nestedSnapshot,
+  });
+  assert.deepEqual(collapsedCarriers.visibleBriefs.map((item) => item.foldId), [parentFold.id],
+    "a collapsed parent's hidden child brief was classified as root-visible");
+  assert(collapsedCarriers.recoverableBriefs.some((item) => item.foldId === childFold.id),
+    "a child behind its parent was not kept recoverable");
+  // Protection is the other runtime reveal path. It must expose the protected
+  // child's source through both levels rather than leaving the lens behind the
+  // provider projection.
+  const protectedState = { ...nestedState, protected: [structuredClone(nestedRef)] };
+  const protectedProjection = JSON.stringify(
+    runtimeForLens.renderFold(parentFold, protectedState, nestedSnapshot));
+  assert(protectedProjection.includes("covered fact cov-123"),
+    "the runtime did not reveal explicitly protected nested source");
+  const protectedCarriers = attribution.projectionCarriers({
+    runtime: runtimeForLens, state: protectedState, snapshot: nestedSnapshot,
+  });
+  assert(protectedCarriers.visibleSourceEntryIds.has("e2"),
+    "the attribution lens did not follow the runtime's protected-source reveal");
+  const nativeReading = (fact) => attribution.attributeFactInSession({
+    runtime: runtimeForLens, entries, sessionId: "attribution-fixture", leafId: "e5", fact,
+    stateEntryType: "acme-active-context-state", foldRecordEntryType: "acme-active-context-fold-record",
+  });
+  assert.equal(nativeReading("raw-789").classification, "visible-raw",
+    "the no-state branch did not read raw through the runtime loader");
+  const discarded = nativeReading("dead-999");
+  assert.equal(discarded.classification, "absent");
+  assert.deepEqual(discarded.offBranchEntryIds, ["e6"],
+    "a dead-branch fact did not name its off-branch entries, so a discard reads as never-stated");
+  assert.equal(nativeReading("zz-none").offBranchEntryIds, undefined,
+    "a never-stated fact grew off-branch entries it does not have");
+  // The answer-to-request join walks ancestors to the request leaf, through the
+  // interleaved record that sits between the leaf and the response.
+  const joined = attribution.requestForAnswer({
+    entries, requests: [{ leafId: "e4", ordinal: 7 }], answerText: "probe-1:",
+  });
+  assert.equal(joined?.request.ordinal, 7, "the answering request was not found through its leaf");
+  assert.equal(joined?.answerEntryId, "e5");
+  assert.equal(attribution.requestForAnswer({
+    entries, requests: [{ leafId: "e4", ordinal: 7 }], answerText: "no such answer",
+  }), null, "a missing answer did not return null");
+  // A sealed full run exhausts memory if every reconstructed forest stays in
+  // one process. The instrument owns a fixed four-row batch, releases each
+  // child before the next, and keeps the heavy runtime import in the child.
+  assert.equal(attribution.ATTRIBUTION_BATCH_ROWS, 4,
+    "the carriage sweep's memory bound drifted from four rows");
+  assert.deepEqual(attribution.attributionBatchStarts(0), []);
+  assert.deepEqual(attribution.attributionBatchStarts(10), [0, 4, 8],
+    "the carriage sweep does not cover every row once in fixed batches");
+  assert.throws(() => attribution.attributionBatchStarts(-1), /non-negative safe integer/);
+  const driver = readFileSync(join(PROJECT, "scripts", "attribute_probe_carriage.mjs"), "utf8");
+  assert(/for \(const start of attributionBatchStarts\(totalRows\)\)/.test(driver),
+    "the campaign sweep does not use the fixed batch partition");
+  assert(/spawnSync\(process\.execPath/.test(driver),
+    "the campaign sweep does not release one child before starting the next");
+  assert(/if \(leafId !== cachedLeafId\)/.test(driver),
+    "one batch rebuilds the same answering leaf for every fact");
+  assert(/providerInputBudget: runConfig\.providerInputBudget/.test(driver),
+    "the carriage snapshot does not use the run's declared serving budget");
+  assert(driver.indexOf("const { createJiti }") > driver.indexOf("async function runAttributionBatch"),
+    "the parent loads the transcript runtime before it delegates a bounded batch");
+  // The release extract is the paper-facing source of numbers. It is complete,
+  // self-hashed, portable, and bound to the current extractor and carriage lens.
+  const resultPath = join(PROJECT, "docs", "fold_vs_compaction", "hidden-mass-results.json");
+  assert(existsSync(resultPath), "the hidden-mass release result is missing");
+  const releaseResult = JSON.parse(readFileSync(resultPath, "utf8"));
+  const { extractSha256, ...resultBody } = releaseResult;
+  assert.equal(extractSha256, sha256Json(resultBody),
+    "the hidden-mass release result changed without regenerating its self-hash");
+  assert.equal(releaseResult.version, 3,
+    "accepted records and refused task-id calls are not separated in the portable schema");
+  assert.equal(releaseResult.planSha256,
+    "eb488827c46ddf630f79b582f0b75070c54e73a65cdf4045002a6fc785e572db");
+  assert.deepEqual(releaseResult.findings.completion, {
+    pifold: { completed: 2, attempted: 2 },
+    native: { completed: 0, attempted: 2 },
+  });
+  assert.deepEqual(releaseResult.findings.ledgerRecordEndpoints, {
+    pifold: { correct: 8, unknown: 0, total: 8 },
+    native: { correct: 0, unknown: 8, total: 8 },
+  });
+  assert.deepEqual(releaseResult.findings.ledgerRecordTaskIdCallAttempts, {
+    pifold: { accepted: 8, rejected: 0, total: 8 },
+    native: { accepted: 8, rejected: 1, total: 9 },
+  }, "the refused native duplicate was counted as an accepted endpoint record");
+  const nativeDuplicate = releaseResult.runs.find((run) =>
+    run.arm === "native" && run.repetition === 1).ledgerRecords.find((row) => row.taskId === "lt-04");
+  assert.deepEqual(nativeDuplicate, {
+    taskId: "lt-04",
+    recordedValue: "unknown",
+    correct: false,
+    acceptedRecords: 1,
+    taskIdCallAttempts: 2,
+    rejectedTaskIdCallAttempts: 1,
+    rejectionCauses: { "already-recorded": 1 },
+  }, "native repetition 1 lt-04 does not distinguish its accepted record from its refusal");
+  assert.deepEqual(releaseResult.findings.ordinaryProbes,
+    { pifold: { matches: 40, total: 42 }, native: null });
+  assert.deepEqual(releaseResult.findings.withheldEndBlock,
+    { pifold: { matches: 60, total: 60, completedRuns: 2 }, native: null });
+  assert.equal(releaseResult.findings.certification.rows, 102);
+  assert.equal(releaseResult.findings.certification.ordinaryMismatchesWithVisibleBrief, 1);
+  assert.equal(releaseResult.findings.certification.ordinaryMismatchesRecoverable, 1);
+  assert.deepEqual(releaseResult.findings.certification.endBlockValueCarriage,
+    { recoverable: 7, "visible-raw": 53 },
+  "the corrected carrier walk did not preserve the seven non-visible end-block matches");
+  assert.equal(releaseResult.carriageRows.length, 102,
+    "the portable result thinned the completed carriage sweep");
+  assert.equal(new Set(releaseResult.carriageRows.map((row) =>
+    `${row.runId}:${row.probeId ?? row.endBlockId}`)).size, 102,
+  "the carriage result repeats a row while claiming full coverage");
+  assert.equal(releaseResult.sourceHashes.extractorSha256,
+    sha256Text(readFileSync(join(PROJECT, "scripts", "extract_hidden_mass_results.mjs"), "utf8")),
+  "the result was not regenerated by the current extractor");
+  assert.equal(releaseResult.sourceHashes.carriageScriptSha256, sha256Text(driver),
+    "the result was not certified by the current carriage sweep");
+  assert.equal(releaseResult.sourceHashes.attributionHelperSha256,
+    sha256Text(readFileSync(join(PROJECT, "scripts", "lib", "pi_context_attribution.mjs"), "utf8")),
+  "the result does not bind the helper that classified its carriage rows");
+  assert.equal(releaseResult.sourceHashes.foldIdentitySha256,
+    sha256Text(readFileSync(join(PROJECT, "scripts", "lib", "pi_fold_identity.mjs"), "utf8")),
+  "the result does not bind the entry identity used to reconstruct fold state");
+  assert.equal(releaseResult.sourceHashes.experimentContractSha256,
+    sha256Text(readFileSync(join(PROJECT, "scripts", "lib", "pi_context_experiment.mjs"), "utf8")),
+  "the result does not bind the contract that constructs end-block questions");
+  assert.equal(releaseResult.sourceHashes.attestationHelperSha256,
+    sha256Text(readFileSync(
+      join(PROJECT, "scripts", "lib", "pi_context_soak_attestation.mjs"), "utf8")),
+  "the result does not bind the helper that defines its source and self hashes");
+  // THE RUNTIME TREE THAT RECONSTRUCTED IT. One equality, and it stays one.
+  //
+  // It nearly became a branch on 2026-08-23: the curation redesign deleted the rider and
+  // its wire parsing with it, every state sol-20260815-hidden sealed carries a rider key,
+  // and the re-extraction the runtime change owed came back with 102 rows of
+  // state-unreadable. The fix was not to soften this line, it was to make the corpus
+  // readable: the rider is read, spent on the state digest through
+  // `legacyRiderStateSha256`, and dropped, and the carriage lens follows the runtime's own
+  // collapse from `toolRefsProtected` onto `refsProtected`. The re-extraction that
+  // followed is byte-identical to the published body, hashes aside, which is what this
+  // equality exists to require.
+  assert.equal(releaseResult.sourceHashes.runtimeTreeSha256,
+    directoryTreeSha256(join(PROJECT, "extensions")),
+  "the result does not bind the runtime tree that reconstructed its fold state and projection");
+  assert(!/\/(?:home|tmp)\//.test(JSON.stringify(releaseResult)),
+    "the portable result leaks a machine-local path");
+  assert(!Object.hasOwn(releaseResult.design.model, "maxTokens"),
+    "the result copied a provider ceiling instead of the declared serving basis");
+  assert(releaseResult.claimLimits.some((line) => /no direct cross-arm end-block score/.test(line)),
+    "the release result omits the missing-native-end-block claim boundary");
+  assert(releaseResult.claimLimits.some((line) => /do not estimate a population failure rate/.test(line)),
+    "the release result turns two attempts into a population estimate");
+  assert(releaseResult.claimLimits.some((line) =>
+    /seven were recoverable but not visible/.test(line)),
+  "the release result hides the corrected non-visible end-block carriers");
+  checks.aFactsCarriageIsAttributedAtTheAnsweringRequest = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 70 - the seeded ledger: transcript-only facts in three channels, and the
+// derive-and-record channel ending in a tool call the workload enforces.
+//
+// Task #79 build 2 of 3 (ratified 2026-08-15). The audit traces' values are
+// stages and paths, and rep 4 of sol-20260814-traps re-derived them at probe
+// time, so the derived class stopped measuring recall; its three missed
+// bindings were never recorded anywhere because a record-it instruction is
+// silently skippable. The ledger's values are seeded tokens planted nowhere in
+// the checkout (the read fence and the closed-book floor pin the transcript as
+// the only source), the whole ledger is a pure function of (mode, contentSeed)
+// with the seed frozen in docs/fold_vs_compaction/hidden-mass-seeds.json before
+// rep 4's readout, and each join's task must be RECORDED through the ledger
+// tool before the next stage is deliverable: the echo makes the record a tool
+// result, no verdict rides back, and correctness is graded post-hoc against
+// the plan the supervisor keeps.
+// ---------------------------------------------------------------------------
+{
+  // The ledger is its seed's own derivation, byte for byte, and nothing else's.
+  const gateSeed = "feedfacefeedface";
+  const smokeLedger = buildLedger({ mode: "smoke", contentSeed: gateSeed });
+  assert.equal(JSON.stringify(smokeLedger),
+    JSON.stringify(buildLedger({ mode: "smoke", contentSeed: gateSeed })),
+    "same seed, byte-identical ledger");
+  assert.notEqual(JSON.stringify(smokeLedger),
+    JSON.stringify(buildLedger({ mode: "smoke", contentSeed: "0123456789abcdef" })),
+    "a different seed rolls different values");
+  const fullLedger = buildLedger({ mode: "full", contentSeed: gateSeed });
+  const fullTokens = ledgerTokensOf(fullLedger);
+  assert(fullTokens.every((token) => LEDGER_TOKEN_PATTERN.test(token)),
+    "every planted value wears the ledger token shape");
+  assert.equal(new Set(fullTokens).size, fullTokens.length,
+    "no token serves two roles");
+  // Full-mode geometry: everything in the first half on payload stages, the
+  // table one row per designated stage in stage order, joins three hops with
+  // the mode's gap, corrections original-early correction-late.
+  const fullModePlan = EXPERIMENT_MODE_PLANS.full;
+  const firstHalfPayload = (stage) => stage >= 1 && stage <= fullModePlan.stageCount / 2 &&
+    !fullModePlan.sealedProbeSchedule.stages.includes(stage);
+  const everyStageOf = (ledger) => [
+    ...ledger.table.map((entry) => entry.stage),
+    ...ledger.singles.map((single) => single.stage),
+    ...ledger.joins.flatMap((join) => [...join.links.map((link) => link.stage), join.taskStage]),
+    ...ledger.corrections.flatMap((correction) => [correction.stage, correction.correctionStage]),
+  ];
+  assert(everyStageOf(fullLedger).every(firstHalfPayload),
+    "every ledger row lands on a first-half payload stage");
+  assert.equal(fullLedger.table.length, 16, "sixteen reconstruction rows in full mode");
+  assert.deepEqual(fullLedger.table.map((entry) => entry.row),
+    Array.from({ length: 16 }, (_, index) => index + 1));
+  assert(fullLedger.table.every((entry, index) => index === 0 ||
+    entry.stage > fullLedger.table[index - 1].stage),
+  "table rows ride strictly increasing stages, so row order is stage order");
+  assert.equal(fullLedger.joins.length, 4);
+  for (const join of fullLedger.joins) {
+    assert.equal(join.links.length, 3, "full-mode joins walk three hops");
+    const stages = [...join.links.map((link) => link.stage), join.taskStage];
+    assert(stages.every((stage, index) => index === 0 ||
+      stage - stages[index - 1] >= fullModePlan.ledger.minGap),
+    "join rows and the task keep the mode's minimum gap");
+    assert(join.links.every((link, index) => index === 0 ||
+      link.subject === join.links[index - 1].value),
+    "each hop consumes the previous hop's value");
+    assert.equal(join.expectedAnswer, join.links.at(-1).value);
+  }
+  for (const correction of fullLedger.corrections) {
+    assert(correction.correctionStage - correction.stage >= fullModePlan.ledger.minGap,
+      "a correction sits at least the mode's gap after its original");
+  }
+  // The live checksum is the correction where one exists, and an unknown
+  // subject refuses rather than answering.
+  const corrected = fullLedger.corrections[0];
+  assert.equal(effectiveLedgerChecksum(fullLedger, corrected.subject), corrected.value);
+  const single = fullLedger.singles[0];
+  assert.equal(effectiveLedgerChecksum(fullLedger, single.subject), single.value);
+  assert.throws(() => effectiveLedgerChecksum(fullLedger, "lv-nowhere"), /No ledger checksum/);
+  // The trap shape: original and correction answer the same text query, so
+  // order is the only separator (gate 65's law on transcript-only facts).
+  const queryPhrase = `the checksum recorded for ${corrected.subject} is`;
+  for (const stage of [corrected.stage, corrected.correctionStage]) {
+    const carrier = ledgerSentencesForStage(fullLedger, stage)
+      .filter((sentence) => sentence.includes(queryPhrase));
+    assert.equal(carrier.length, 1,
+      `stage ${stage} must carry exactly one sentence answering the checksum query`);
+  }
+  // No woven sentence tells the model it is being tested, the task names the
+  // tool, the task id, the anchor and the unknown escape, and the only token a
+  // task sentence carries is its anchor: never the answer, never a hop value.
+  for (let stage = 1; stage <= fullModePlan.stageCount; stage += 1) {
+    for (const sentence of ledgerSentencesForStage(fullLedger, stage)) {
+      assert.deepEqual(testAwarenessLeaks(sentence), [], sentence);
+    }
+  }
+  const taskJoin = fullLedger.joins[0];
+  const taskSentence = ledgerTaskSentence(taskJoin);
+  assert(taskSentence.includes(EXPERIMENT_LEDGER_TOOL_NAME) &&
+    taskSentence.includes(taskJoin.id) && taskSentence.includes(LEDGER_UNKNOWN_VALUE),
+  "the task sentence names the tool, the task id and the unknown escape");
+  const taskTokens = taskSentence.match(/lv-[0-9a-f]{6}/g) ?? [];
+  assert(taskTokens.length > 0 &&
+    taskTokens.every((token) => token === taskJoin.links[0].subject),
+  "a task sentence names its anchor and no other token");
+  // Plan laws, each probed against the shared fixture: a tampered value dies on
+  // re-derivation, an unwoven sentence and a re-stated fact and a leaked token
+  // each die by their own names.
+  const rehash70 = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  const bent = structuredClone(plan);
+  bent.ledger.table[0].value = "lv-000000";
+  assert.throws(() => validateStagePlan(rehash70(bent)), /not its own content seed's derivation/);
+  const wovenStages = plan.stages
+    .map((stage) => ({ ordinal: stage.ordinal, sentences: ledgerSentencesForStage(plan.ledger, stage.ordinal) }))
+    .filter((entry) => entry.sentences.length > 0);
+  assert(wovenStages.length > 0, "the fixture plan must actually weave ledger sentences");
+  const wovenOrdinal = wovenStages[0].ordinal;
+  const wovenSentence = wovenStages[0].sentences[0];
+  const unwovenPlan = structuredClone(plan);
+  unwovenPlan.stages[wovenOrdinal - 1].instructions =
+    unwovenPlan.stages[wovenOrdinal - 1].instructions.replace(` ${wovenSentence}`, "");
+  assert.throws(() => validateStagePlan(rehash70(unwovenPlan)), /does not carry its ledger sentence/);
+  const restated = structuredClone(plan);
+  restated.stages[7].instructions += ` ${wovenSentence}`;
+  assert.throws(() => validateStagePlan(rehash70(restated)), /appears 2 times/);
+  const leakedToken = structuredClone(plan);
+  leakedToken.stages[7].instructions += ` ${plan.ledger.table[0].value}`;
+  assert.throws(() => validateStagePlan(rehash70(leakedToken)), /appears outside its own sentences/);
+  // The run-visible plan keeps the geometry and loses every value and the seed
+  // that would regenerate them.
+  const visiblePlan = stagePlanForRun(plan);
+  const visibleLedgerText = JSON.stringify(visiblePlan.ledger);
+  assert(!visibleLedgerText.includes(plan.ledger.contentSeed),
+    "the run-visible plan carries the seed that regenerates every value");
+  for (const token of ledgerTokensOf(plan.ledger)) {
+    assert(!visibleLedgerText.includes(token), "the run-visible plan carries a ledger value");
+  }
+  assert.deepEqual(visiblePlan.ledger.joins.map((join) => ({ id: join.id, taskStage: join.taskStage })),
+    plan.ledger.joins.map((join) => ({ id: join.id, taskStage: join.taskStage })),
+  "the run-visible plan keeps the task geometry the extension gates on");
+  // The stager's collision scan sees ledger tokens exactly as it sees code words.
+  assert.deepEqual(plantedWordCollisions(
+    `int x; /* ${fullTokens[0]} */ cw-aaaaaa`, [fullTokens[0], "cw-bbbbbb"]), [fullTokens[0]]);
+  assert.deepEqual(plantedWordCollisions("clean text", fullTokens), []);
+  // Run-config laws after the ledger's retirement (2026-08-25). An ARM run must still
+  // carry ONE graded instrument, or it burns six hours measuring nothing, but WHICH one is
+  // now open: a sealed v4 config carries ledger tasks, a v5 config carries stale artifacts.
+  // What is still refused is a MALFORMED schedule, and a config carrying neither.
+  assert.throws(() => validateExperimentRunConfig(
+    (({ ledgerTasks: _tasks, ...rest }) => rest)(runConfig)),
+  /neither ledger tasks nor stale artifacts/);
+  validateExperimentRunConfig({
+    ...(({ ledgerTasks: _tasks, ...rest }) => rest)(runConfig),
+    staleArtifacts: [{
+      id: "af-01", schema: "manifest", askStage: 4, path: "notes/review-passes.md",
+      request: "bring this up to date where you can", text: "# Review passes\n",
+      fieldKeys: ["pass-01"],
+    }],
+  });
+  assert.throws(() => validateExperimentRunConfig({ ...runConfig, ledgerTasks: [] }),
+    /must carry it whole/);
+  assert.throws(() => validateExperimentRunConfig({
+    ...runConfig, ledgerTasks: [{ id: "lt-01", stage: 99 }],
+  }), /must carry it whole/);
+  assert.throws(() => validateExperimentRunConfig((({ guidance: _g, ...rest }) => rest)({
+    ...runConfig, sessionType: EXPERIMENT_CLOSED_BOOK_LABEL, arm: EXPERIMENT_CLOSED_BOOK_LABEL,
+  })), /arm-condition keys with no referent/);
+  // The endpoint, driven end to end through the real extension and the real IPC
+  // dance: an unassigned id gets one answer whether future or fictional, the
+  // gate refuses the next stage with the exact repair and the key unconsumed,
+  // the echo restates the record verbatim, a duplicate names the standing
+  // record, and the artifacts carry the record and the refusal with no latch.
+  const jitiPath70 = join(PROJECT, "node_modules", "jiti", "lib", "jiti.mjs");
+  assert(existsSync(jitiPath70), "could not resolve package-local jiti to drive the extension");
+  const typeboxPath70 = join(PI_INSTALL_ROOT, "node_modules", "typebox", "build", "index.mjs");
+  assert(existsSync(typeboxPath70), `the pi install does not carry typebox at ${typeboxPath70}`);
+  const { createJiti: createJiti70 } = await import(pathToFileURL(jitiPath70));
+  const { createPiContextExperimentExtension } = await createJiti70(import.meta.url, {
+    alias: { typebox: typeboxPath70 },
+  }).import(join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"));
+  const runDir = mkdtempSync(join(tmpdir(), "pi-fold-ledger-gate-"));
+  useRunChannelDirectory(runDir);
+  const keyOne = "1".repeat(64);
+  const keyTwo = "2".repeat(64);
+  const tools = new Map();
+  const mockPi = {
+    on() {},
+    registerTool(definition) { tools.set(definition.name, definition); },
+    registerCommand() {},
+    sendMessage() {},
+    async appendEntry() {},
+  };
+  const handle = createPiContextExperimentExtension({
+    version: EXPERIMENT_PROTOCOL_VERSION,
+    runId: "ledger-gate",
+    runDir,
+    campaignId: "gate-70",
+    arm: "native",
+    mode: "smoke",
+    stageCount: EXPERIMENT_MODE_PLANS.smoke.stageCount,
+    watchdogMs: 10_000,
+    ledgerTasks: [{ id: "lt-01", stage: 1 }],
+  });
+  handle.factory(mockPi);
+  // NO TOOL REGISTERS AT ALL NOW, and that is the assertion. `ledger_record` was deleted
+  // 2026-08-25 because a tool sitting in the model's list every turn saying "Record the
+  // result of an assigned ledger task" is a standing instruction to hoard derived facts,
+  // delivered continuously, which hands back most of what the de-priming bought. `repo_stage`
+  // went the same day: it asked the model to echo back a 64-hex key the extension was
+  // already holding, which measured retention of the DELIVERY CHANNEL and let an arm that
+  // had just compacted lose the ability to receive work.
+  //
+  // The property that made `ledger_record` hard to give up, a record fixed AT RECORD TIME,
+  // is supplied by the stale artifact: the model writes into the note and the harness
+  // snapshots it at collection. Gate 111 owns that.
+  assert.equal(tools.get(EXPERIMENT_TOOL_NAME), undefined,
+    "an arm still registers the delivery tool, so the model can be asked to hold a key");
+  assert.equal(tools.get(EXPERIMENT_LEDGER_TOOL_NAME), undefined,
+    "an arm still registers the record tool");
+  assert.equal(tools.size, 0,
+    `the extension registers ${tools.size} tool(s); the arms carry stock Pi and nothing else`);
+  // Delivery is a HANDLE the worker drives, not a tool the model calls.
+  assert.equal(typeof handle.deliverStage, "function",
+    "the extension exposes no stage delivery for the worker to drive");
+  assert.equal(typeof handle.collectPendingArtifact, "function",
+    "nothing collects the last stage's artifact, so a populated note survives the run");
+  // Neither deleted channel reaches the event stream, asserted rather than assumed: a
+  // leftover code path emitting either would mean the model still saw it.
+  const gateEvents = existsSync(join(runDir, "worker-events.jsonl"))
+    ? readFileSync(join(runDir, "worker-events.jsonl"), "utf8")
+      .split("\n").filter(Boolean).map((line) => JSON.parse(line))
+    : [];
+  assert(!gateEvents.some((event) =>
+    event.kind === "ledger-record" || event.kind === "ledger-record-refused" ||
+    event.kind === "ledger-gate-refusal" || event.kind === "stale-stage-key"),
+  "a deleted channel still emits events");
+  assert(!existsSync(join(runDir, "failure-latch.jsonl")) ||
+    readFileSync(join(runDir, "failure-latch.jsonl"), "utf8").trim() === "",
+  "a deleted gate still latches");
+  rmSync(runDir, { recursive: true, force: true });
+  // The frozen-seed law at the stager, and the supervisor forwarding ids and
+  // stages only: expected values never reach the run config.
+  const staging70 = readFileSync(join(PROJECT, "scripts", "stage_pi_context_experiment.mjs"), "utf8");
+  assert(staging70.includes('"hidden-mass-seeds.json"'),
+    "the stager must read the frozen seed file");
+  assert(!staging70.includes("--content-seed"),
+    "the content seed is frozen in the file, never a flag");
+  // THE STAGER NO LONGER WEAVES A LEDGER AT ALL. It used to push "Audit ledger, table row
+  // 01 of 16: lv-a56807" into the instructions, and that sentence shape is what a
+  // summarizer transcribes: the sealed corpus showed a native run's table score WAS its
+  // summary's table content, as a set identity. Asserted as an absence so a revival is a
+  // failure rather than a quiet regression.
+  assert(!staging70.includes("ledgerSentencesForStage("),
+    "the stager weaves ledger sentences again");
+  assert(!staging70.includes("buildLedger("), "the stager builds a ledger again");
+  const supervisor70 = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment.mjs"), "utf8");
+  // The schedule is forwarded ONLY while a sealed-corpus plan still carries a ledger, and
+  // still as ids and stages only when it does.
+  assert(supervisor70.includes("plan.ledger === undefined ? {} : {") &&
+    supervisor70.includes(
+      "ledgerTasks: plan.ledger.joins.map((join) => ({ id: join.id, stage: join.taskStage }))"),
+  "the supervisor must forward the task schedule as ids and stages only, and only when the " +
+  "plan still carries a ledger");
+  checks.theSeededLedgerWeavesThreeChannelsAndGatesProgressionOnRecords = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 71 - the withheld end block: one asking surface built at run time from
+// (plan.ledger, querySeed), byte-identical across arms, absent from every
+// pre-phase surface, and graded three ways.
+//
+// Task #79 build 3 of 3. The querySeed is frozen beside the contentSeed and
+// governs ORDER only: every ledger fact is asked, ids are assigned after the
+// shuffle so position reveals nothing, and the checksum question is ONE wording
+// for corrected and uncorrected subjects alike (a question that acknowledged a
+// correction only where one existed would announce the trap in the asking).
+// Grading splits record correctness (fixed at record time, the ledger tool's
+// event against the plan), recall fidelity against the agent's OWN record
+// (faithfully restating your own error is unfakeable event recall; restating
+// the truth instead is re-derivation evidence), and what the answers cost in
+// recovery, with the reconstruction table graded row-exact and the
+// withdrawn-value trap cell stated beside the verdict.
+// ---------------------------------------------------------------------------
+{
+  const gateLedger = buildLedger({ mode: "full", contentSeed: "feedfacefeedface" });
+  const gateSeed = "abcdef0123456789";
+  // Purity: same inputs, byte-identical prompt; a different seed reorders the
+  // SAME question set, because order is the only thing the seed may choose.
+  const questions = endBlockQuestions(gateLedger, gateSeed);
+  assert.equal(endBlockPrompt(gateLedger, gateSeed), endBlockPrompt(gateLedger, gateSeed),
+    "same ledger and seed must produce byte-identical prompts");
+  const reordered = endBlockQuestions(gateLedger, "1111111111111111");
+  assert.deepEqual([...questions.map((item) => item.question)].sort(),
+    [...reordered.map((item) => item.question)].sort(),
+    "the seed governs order, never selection: every ledger fact is always asked");
+  assert.notEqual(JSON.stringify(questions.map((item) => item.question)),
+    JSON.stringify(reordered.map((item) => item.question)),
+    "a different seed shuffles the order");
+  assert.equal(questions.filter((item) => item.kind === "checksum").length,
+    gateLedger.singles.length + gateLedger.corrections.length);
+  assert.equal(questions.filter((item) => item.kind === "join").length, gateLedger.joins.length);
+  assert.equal(questions.at(-1).id, "end-table");
+  assert.deepEqual(questions.slice(0, -1).map((item) => item.id),
+    questions.slice(0, -1).map((_, index) => `end-${String(index + 1).padStart(2, "0")}`),
+    "ids are positional after the shuffle, so an id reveals nothing about channel");
+  // One-wording law: corrected and uncorrected checksum questions differ only
+  // in their subject token.
+  const correctedQuestion = questions.find((item) =>
+    item.kind === "checksum" && item.withdrawnAnswer !== null);
+  const uncorrectedQuestion = questions.find((item) =>
+    item.kind === "checksum" && item.withdrawnAnswer === null);
+  assert.equal(correctedQuestion.question.replaceAll(correctedQuestion.subject, "X"),
+    uncorrectedQuestion.question.replaceAll(uncorrectedQuestion.subject, "X"),
+    "one wording for trapped and untrapped subjects, or the asking measures the announcement");
+  // No test premise, and the questions exist in NO pre-phase surface: they are
+  // built at run time and the plan never carries them.
+  assert.deepEqual(testAwarenessLeaks(endBlockPrompt(gateLedger, gateSeed)), []);
+  for (const item of endBlockQuestions(plan.ledger, gateSeed)) {
+    for (const stage of plan.stages) {
+      assert(!stage.instructions.includes(item.question),
+        `stage ${stage.ordinal} carries an end-block question before the end`);
+    }
+  }
+  // Grading cells, driven end to end through the transcript parser. The four
+  // joins cover the whole split: faithful-to-a-wrong-record (the unfakeable
+  // recall cell), truth-instead-of-record (re-derivation), no record at all,
+  // and faithful-to-a-right-record. Checksums cover the trap cell, a clean
+  // match, case normalization, and unanswered. The table mixes bare and padded
+  // row numbers, one wrong row and one missing row.
+  const byKind = (kind) => questions.filter((item) => item.kind === kind);
+  const joinItems = byKind("join");
+  const joinTruth = (item) => gateLedger.joins.find((join) => join.id === item.taskId);
+  const checksumItems = byKind("checksum");
+  const trapItem = checksumItems.find((item) => item.withdrawnAnswer !== null);
+  const cleanCorrectedItem = checksumItems.find((item) =>
+    item.withdrawnAnswer !== null && item !== trapItem);
+  const plainItems = checksumItems.filter((item) => item.withdrawnAnswer === null);
+  const answerLines = [
+    `${trapItem.id}: ${trapItem.withdrawnAnswer}`,
+    `${cleanCorrectedItem.id}: ${cleanCorrectedItem.expectedAnswer}`,
+    `${plainItems[0].id}: ${plainItems[0].expectedAnswer.toUpperCase()}`,
+    // plainItems[1] deliberately unanswered.
+    `${joinItems[0].id}: lv-wrong1`,
+    `${joinItems[1].id}: ${joinTruth(joinItems[1]).expectedAnswer}`,
+    `${joinItems[2].id}: lv-orphan`,
+    `${joinItems[3].id}: ${joinTruth(joinItems[3]).expectedAnswer}`,
+    "end-table: reconstructed below.",
+    ...gateLedger.table
+      .filter((entry) => entry.row !== 6)
+      .map((entry) => entry.row === 5
+        ? `row ${String(entry.row).padStart(2, "0")}: lv-000bad`
+        : entry.row === 3
+          ? `row ${entry.row}: ${entry.value}`
+          : `row ${String(entry.row).padStart(2, "0")}: ${entry.value}`),
+  ].join("\n");
+  const gateEntries = [
+    { type: "message", message: { role: "user", content: endBlockPrompt(gateLedger, gateSeed) } },
+    { type: "message", message: { role: "toolResult", toolName: "read", content: [] } },
+    { type: "message", message: { role: "toolResult", toolName: EXPERIMENT_LEDGER_TOOL_NAME, content: [] } },
+    { type: "message", message: { role: "assistant", content: [{ type: "text", text: answerLines }] } },
+  ];
+  const gateEvents = [
+    { kind: "ledger-record", details: { id: joinItems[0].taskId, value: "lv-wrong1" } },
+    { kind: "ledger-record", details: { id: joinItems[1].taskId, value: "lv-wrong2" } },
+    // joinItems[2] has NO record event.
+    { kind: "ledger-record", details: { id: joinItems[3].taskId, value: joinTruth(joinItems[3]).expectedAnswer } },
+  ];
+  const verdicts = endBlockVerdicts({
+    entries: gateEntries, ledger: gateLedger, querySeed: gateSeed, events: gateEvents,
+  });
+  assert.equal(verdicts.delivered, true);
+  const rowOf = (id) => verdicts.rows.find((row) => row.id === id);
+  assert.deepEqual([rowOf(trapItem.id).verdict, rowOf(trapItem.id).withdrawnMatch],
+    ["mismatch", true],
+    "the withdrawn value is the trap cell, stated beside the verdict rather than inside it");
+  assert.deepEqual([rowOf(cleanCorrectedItem.id).verdict, rowOf(cleanCorrectedItem.id).withdrawnMatch],
+    ["match", false]);
+  assert.equal(rowOf(plainItems[0].id).verdict, "match",
+    "value comparison is normalized: an uppercased token still matches");
+  assert.equal(rowOf(plainItems[1].id).verdict, "unanswered");
+  const faithfulWrong = rowOf(joinItems[0].id);
+  assert.deepEqual([faithfulWrong.recordCorrect, faithfulWrong.recallOfRecord, faithfulWrong.truthMatch],
+    [false, true, false],
+    "faithful recall of a wrong record is the unfakeable event-recall cell");
+  const rederived = rowOf(joinItems[1].id);
+  assert.deepEqual([rederived.recordCorrect, rederived.recallOfRecord, rederived.truthMatch],
+    [false, false, true],
+    "the truth instead of the record is re-derivation, never recall");
+  const orphan = rowOf(joinItems[2].id);
+  assert.deepEqual([orphan.recordedValue, orphan.recordCorrect, orphan.recallOfRecord],
+    [null, null, null], "a missing record grades as null, never as a silent false");
+  const faithfulRight = rowOf(joinItems[3].id);
+  assert.deepEqual([faithfulRight.recordCorrect, faithfulRight.recallOfRecord, faithfulRight.truthMatch],
+    [true, true, true]);
+  const table = rowOf("end-table");
+  assert.deepEqual([table.rowsTotal, table.rowsAnswered, table.rowsCorrect], [16, 15, 14],
+    "row-exact: a bare row number parses, a padded one parses, a wrong value and a missing row each cost one");
+  assert.deepEqual(table.rows.filter((row) => !row.match).map((row) => row.row), [5, 6]);
+  // The recovery window counts the read and never the ledger tool: recording is
+  // workload traffic, not recovery.
+  assert.deepEqual([verdicts.recovery.fileReads, verdicts.recovery.contextToolCalls,
+    verdicts.recovery.recoveryCalls], [1, 0, 1]);
+  // A session that never carries the prompt reads as not delivered, loudly,
+  // rather than being fuzzily matched.
+  const undelivered = endBlockVerdicts({
+    entries: [], ledger: gateLedger, querySeed: gateSeed, events: [],
+  });
+  assert.equal(undelivered.delivered, false);
+  assert.equal(undelivered.recovery, null);
+  // The wiring pins: the worker asks only after the whole workload delivered
+  // cleanly and pins the exact bytes in its manifest; the adjudicator recomputes
+  // the pin and grades through the shared lens; the supervisor reads the frozen
+  // querySeed from the sealed seeds file.
+  // COMPOSED OUTSIDE THE SANDBOX (Shane 2026-08-21). The worker used to build this
+  // from plan.ledger and config.querySeed, which meant both had to be inside the
+  // namespace, and a seed plus the ledger geometry is a derivable question list: a
+  // model that can derive the questions has been told what to remember. The
+  // supervisor composes it from the same two inputs on its own side and the worker
+  // carries only the finished text, which rides in the self-deleting config.
+  const supervisorEndBlock = source("scripts/run_pi_context_experiment.mjs");
+  // WHICH end block the plan asks is gate 115's business (a v4 plan's ledger, a v5 plan's
+  // adjacency questions). What this gate pins is unchanged: the supervisor composes it on
+  // ITS OWN SIDE from the plan and the frozen seed, so neither ever enters the namespace.
+  assert(supervisorEndBlock.includes("composeEndBlockPrompt(plan, hiddenMassSeeds.querySeed)"),
+    "the supervisor must build the end block from the plan and the frozen seed");
+  assert(!worker.includes("plan.ledger"),
+    "the worker still reaches for the ledger the sandboxed plan does not carry");
+  assert(worker.includes("endBlockSha256: sha256Text(config.endBlockPrompt ?? \"\")"),
+    "the worker manifest must pin the end block's exact bytes");
+  // The clean-stop half of this condition went with the resume: turns now end after every
+  // stage by design, so "the model chose to stop" no longer distinguishes anything. What
+  // still binds, and is the part this gate exists for, is that the end block comes only
+  // after the WHOLE workload was delivered, so no pre-phase surface ever carried it.
+  assert(/if \(!deadlineFired && stagesDelivered\(\) === plan\.stageCount\) \{\n\s*await session\.prompt\(config\.endBlockPrompt/.test(worker),
+    "the end block is asked before the whole workload was delivered");
+  assert(adjudicator.includes(
+    "manifest.endBlockSha256 === sha256Text(composeEndBlockPrompt(plan, config.querySeed))"),
+  "the adjudicator must recompute the end-block pin rather than trust it");
+  assert(adjudicator.includes("endBlockVerdicts({") &&
+    adjudicator.includes("endBlockAdjacencyTranscript({"),
+  "the adjudicator must grade the end block through the shared lens, of either kind");
+  // TWO DELIVERY SHAPES, ONE CONTRACT. A pull-delivered run (a `firstChallenge` in its
+  // config) carries one user message plus its recorded resumes plus the end block; a
+  // push-delivered one carries exactly one per stage plus the end block and no resumes at
+  // all. Both are counted, so sealed v4 runs keep validating and a v5 run cannot smuggle in
+  // an extra message either.
+  assert(adjudicator.includes("const pullDelivered = config.firstChallenge !== undefined") &&
+    adjudicator.includes("1 + recordedResumes + endBlockDelivered") &&
+    adjudicator.includes("plan.stageCount + endBlockDelivered") &&
+    adjudicator.includes("userMessages === expectedUserMessages"),
+  "the user-message contract must count the identified end block, and only it, on both delivery shapes");
+  const supervisor71 = source("scripts/run_pi_context_experiment.mjs");
+  assert(supervisor71.includes('"hidden-mass-seeds.json"') &&
+    supervisor71.includes("querySeed: hiddenMassSeeds.querySeed"),
+  "the supervisor must read the frozen query seed from the sealed seeds file");
+  checks.theWithheldEndBlockAsksEverythingAndGradesThreeWays = true;
+}
+
+// GATE 72 IS RETIRED (2026-08-25). It bounded a resume that bought no progress: three
+// consecutive nudges at one undelivered stage failed the run by name, born from
+// sol-20260815-hidden native rep 1, which lost stage 39's key to compaction and was
+// re-prompted every nine seconds for 4.3 hours, 1,761 provider responses and $127.68 for
+// zero stages. There are no resumes to bound: stages arrive as user messages, turns end
+// after each one by design, and a model that stops is finished rather than stalled. Its
+// number stays spent.
+
+// GATE 73 - a deposited campaign reads its own plan after relocation.
+//
+// Run configs are sealed evidence and therefore retain the authoring host's
+// absolute planPath. Analysis must not follow that path: a recipient should be
+// able to unpack the campaign anywhere and use the stages-full.json beside it.
+// ---------------------------------------------------------------------------
+{
+  const relocated = join(tmpdir(), "relocated hidden-mass campaign");
+  assert.equal(campaignPlanPath(relocated), join(relocated, "stages-full.json"),
+    "campaign plan resolution is not rooted in the relocated campaign");
+
+  const extractor = source("scripts/extract_hidden_mass_results.mjs");
+  const carriage = source("scripts/attribute_probe_carriage.mjs");
+  assert(extractor.includes("campaignPlanPath(campaignDir)") &&
+    !extractor.includes("readJson(configs[0].planPath)"),
+  "the portable extractor still follows a sealed author-host plan path");
+  assert(carriage.includes("campaignPlanPath(campaignDir)") &&
+    !carriage.includes("readJson(runConfig.planPath)"),
+  "the carriage sweep still follows a sealed author-host plan path");
+
+  checks.aDepositedCampaignReadsItsOwnPlanAfterRelocation = true;
+}
+
+// GATE 74 - the subscription cache topology probe measures revisitable branches and
+// temporary suffix replacement without borrowing an API-key path or an output ceiling.
+//
+// A positive cache read after a branch switch proves only the prefix before the fork.
+// The revisited raw and folded readings must both extend beyond that measured shared
+// baseline. Likewise, removing a temporary suffix counts only when the replacement keeps
+// at least the stable-prefix read observed while that suffix was present. Three isolated
+// repetitions are the promotion boundary, while one remains available as a smoke.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(SUBSCRIPTION_CACHE_PROVIDER, "openai-codex");
+  assert.equal(SUBSCRIPTION_CACHE_MODEL, "gpt-5.6-luna");
+  assert.equal(SUBSCRIPTION_CACHE_API, "openai-codex-responses");
+  assert.equal(SUBSCRIPTION_CACHE_ENDPOINT,
+    "https://chatgpt.com/backend-api/codex/responses");
+  assert.equal(SUBSCRIPTION_CACHE_MINIMUM_TOKENS, 1_024);
+  assert.equal(SUBSCRIPTION_CACHE_DEFAULT_REPETITIONS, 3);
+
+  const cachePlan = buildSubscriptionCacheTopologyPlan({
+    nonce: "0123456789abcdef",
+    repetitions: SUBSCRIPTION_CACHE_DEFAULT_REPETITIONS,
+  });
+  const manifest = subscriptionCacheTopologyManifest(cachePlan);
+  assert.equal(manifest.requestCount, 21,
+    "the default probe is not the bounded seven-request shape repeated three times");
+  assert.deepEqual(manifest.sequences, {
+    branchRevisit: ["raw-first", "folded-first", "raw-again", "folded-again"],
+    temporarySuffix: ["prefix-warm", "temporary-suffix-present", "temporary-suffix-replaced"],
+  });
+  const cacheKeys = cachePlan.plans.flatMap((entry) => entry.lanes.map((lane) => lane.cacheKey));
+  assert.equal(new Set(cacheKeys).size, 6,
+    "a repetition or lane reuses another probe session's cache key");
+  const firstBranch = cachePlan.plans[0].lanes[0].requests;
+  assert.deepEqual(firstBranch[0].input, firstBranch[2].input,
+    "expand is not a byte-exact revisit of the original raw branch");
+  assert.deepEqual(firstBranch[1].input, firstBranch[3].input,
+    "refold is not a byte-exact revisit of the original folded branch");
+  assert.notDeepEqual(firstBranch[0].input, firstBranch[1].input,
+    "raw and folded requests do not diverge at the measured middle span");
+  assert.deepEqual(firstBranch[0].input[0], firstBranch[1].input[0],
+    "the branch fork changed material before the mutable span");
+  assert.deepEqual(firstBranch[0].input[2], firstBranch[1].input[2],
+    "the branch fork changed the stable material after the mutable span");
+  assert(firstBranch[0].input[0].content[0].text.length > 8_192,
+    "the shared branch prefix is too small to exercise the provider's cache minimum");
+  assert.notDeepEqual(cachePlan.plans[0].lanes[0].requests[0].input[0],
+    cachePlan.plans[1].lanes[0].requests[0].input[0],
+  "repetitions are not isolated near the start of the cacheable prefix");
+  const firstSuffix = cachePlan.plans[0].lanes[1].requests;
+  assert.deepEqual(firstSuffix[0].input[0], firstSuffix[1].input[0]);
+  assert.deepEqual(firstSuffix[1].input[0], firstSuffix[2].input[0]);
+  assert.notDeepEqual(firstSuffix[0].input[1], firstSuffix[1].input[1]);
+  assert.notDeepEqual(firstSuffix[1].input[1], firstSuffix[2].input[1]);
+  assert.deepEqual(firstSuffix[0].input[2], firstSuffix[2].input[2]);
+  assert(firstSuffix[0].input[0].content[0].text.length > 8_192,
+    "the temporary-suffix prefix is too small to exercise the provider's cache minimum");
+
+  const payload = {
+    input: firstBranch[0].input,
+    prompt_cache_key: cachePlan.plans[0].lanes[0].cacheKey,
+    tool_choice: "none",
+  };
+  assert.equal(assertImplicitSubscriptionPayload(payload, {
+    cacheKey: cachePlan.plans[0].lanes[0].cacheKey,
+    input: firstBranch[0].input,
+  }), true);
+  assert.throws(() => assertImplicitSubscriptionPayload(
+    { ...payload, max_output_tokens: 16 },
+    { cacheKey: payload.prompt_cache_key, input: payload.input }), /output ceiling/);
+  assert.throws(() => assertImplicitSubscriptionPayload(
+    { ...payload, metadata: { prompt_cache_breakpoint: { mode: "explicit" } } },
+    { cacheKey: payload.prompt_cache_key, input: payload.input }), /explicit cache field/);
+  assert.throws(() => assertImplicitSubscriptionPayload(
+    { ...payload, prompt_cache_options: { mode: "explicit" } },
+    { cacheKey: payload.prompt_cache_key, input: payload.input }), /explicit cache field/);
+  assert.throws(() => assertImplicitSubscriptionPayload(payload,
+    { cacheKey: "another-key", input: payload.input }), /lost.*cache key/);
+
+  const authHeaders = {
+    authorization: "Bearer offline-fixture",
+    "chatgpt-account-id": "offline-account",
+  };
+  assert.equal(assertSubscriptionDestination(SUBSCRIPTION_CACHE_ENDPOINT,
+    { headers: authHeaders }), SUBSCRIPTION_CACHE_ENDPOINT);
+  assert.throws(() => assertSubscriptionDestination("https://api.openai.example/v1/responses",
+    { headers: authHeaders }), /Blocked non-subscription destination/);
+  assert.throws(() => assertSubscriptionDestination(SUBSCRIPTION_CACHE_ENDPOINT, { headers: {} }),
+    /lacks bearer authentication/);
+  const subscriptionRuntime = {
+    isUsingSubscription: () => true,
+    isUsingOAuth: () => true,
+  };
+  const subscriptionModel = {
+    id: SUBSCRIPTION_CACHE_MODEL,
+    api: SUBSCRIPTION_CACHE_API,
+    baseUrl: "https://chatgpt.com/backend-api",
+  };
+  assert.equal(assertSubscriptionModel(subscriptionRuntime, subscriptionModel), true);
+  assert.throws(() => assertSubscriptionModel({
+    ...subscriptionRuntime,
+    isUsingOAuth: () => false,
+  }, subscriptionModel), /not using OAuth/);
+  assert.throws(() => assertSubscriptionModel(subscriptionRuntime, {
+    ...subscriptionModel,
+    baseUrl: "https://api.openai.example/v1",
+  }), /unexpected subscription base/);
+
+  const observedRows = [];
+  const observedReads = {
+    "raw-first": 0,
+    "folded-first": 2_816,
+    "raw-again": 5_888,
+    "folded-again": 4_864,
+    "prefix-warm": 0,
+    "temporary-suffix-present": 3_840,
+    "temporary-suffix-replaced": 3_840,
+  };
+  for (let repetition = 1; repetition <= 3; repetition++) {
+    for (const [label, cacheRead] of Object.entries(observedReads)) {
+      observedRows.push({
+        repetition,
+        label,
+        httpStatus: 200,
+        stopReason: "stop",
+        usage: { cacheRead: cacheRead + (repetition - 1) * 128 },
+      });
+    }
+  }
+  const observed = classifySubscriptionCacheRepetition(
+    observedRows.filter((row) => row.repetition === 1));
+  assert.equal(observed.sharedForkRead, 2_816);
+  assert.equal(observed.rawBranchBeyondFork, 3_072);
+  assert.equal(observed.foldedBranchBeyondFork, 2_048);
+  assert.equal(observed.branchRevisitConfirmed, true);
+  assert.equal(observed.temporarySuffixReplacementConfirmed, true);
+  const repeated = summarizeSubscriptionCacheTopology(observedRows, 3);
+  assert.equal(repeated.confirmedRepetitions, 3);
+  assert.equal(repeated.promotionEligible, true);
+  assert.equal(summarizeSubscriptionCacheTopology(
+    observedRows.filter((row) => row.repetition === 1), 1).promotionEligible, false,
+  "one successful session incorrectly promotes a cache assumption");
+  const noRawBranch = observedRows.filter((row) => row.repetition === 1)
+    .map((row) => row.label === "raw-again"
+      ? { ...row, usage: { cacheRead: observed.sharedForkRead } }
+      : row);
+  assert.equal(classifySubscriptionCacheRepetition(noRawBranch).branchRevisitConfirmed, false,
+    "a read ending at the shared fork is mistaken for recovery of the raw branch");
+  const suffixLoss = observedRows.filter((row) => row.repetition === 1)
+    .map((row) => row.label === "temporary-suffix-replaced"
+      ? { ...row, usage: { cacheRead: 1_024 } }
+      : row);
+  assert.equal(
+    classifySubscriptionCacheRepetition(suffixLoss).temporarySuffixReplacementConfirmed,
+    false,
+    "replacement is called safe after losing part of the stable prefix read");
+
+  const probeSource = source("scripts/probe_subscription_cache_topology.mjs");
+  assert(!probeSource.includes("OPENAI_API_KEY") && !probeSource.includes("api.openai.com"),
+    "the subscription probe contains a direct OpenAI API path");
+  assert(!/\bmaxTokens\s*:/.test(probeSource),
+    "the subscription probe supplies a provider output ceiling");
+  assert(probeSource.includes('transport: "sse"') &&
+    probeSource.includes('cacheRetention: "short"') &&
+    probeSource.includes("maxRetries: 0"),
+  "the live probe does not pin the measured subscription transport");
+  const dryRun = spawnSync(process.execPath,
+    [join(PROJECT, "scripts", "probe_subscription_cache_topology.mjs"), "--repetitions=1"],
+    { encoding: "utf8" });
+  assert.equal(dryRun.status, 0, dryRun.stderr);
+  const dryReport = JSON.parse(dryRun.stdout);
+  assert.equal(dryReport.live, false);
+  assert.equal(dryReport.networkRequests, 0);
+  assert.equal(dryReport.manifest.requestCount, 7);
+
+  checks.theSubscriptionCacheTopologyProbePinsBranchAndTemporarySuffixEvidence = true;
+}
+
+// GATE 75 - the real-path cache probe uses the production fold projection, Pi's
+// custom-message conversion, and Pi's Codex serializer without editing the payload.
+//
+// Expand must make the earlier raw request a complete prefix of the later request.
+// Refold must do the same for the earlier folded request. A temporary carrier may
+// appear for one request, but its withdrawal must leave every durable message that
+// preceded it untouched. Cache-read claims remain separate from these byte facts.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(SUBSCRIPTION_CACHE_PROJECTION_PROTOCOL_VERSION, 1);
+  const projectionPlan = await buildSubscriptionCacheProjectionPlan({
+    nonce: "0123456789abcdef",
+    repetitions: SUBSCRIPTION_CACHE_DEFAULT_REPETITIONS,
+  });
+  const projectionManifest = subscriptionCacheProjectionManifest(projectionPlan);
+  assert.equal(projectionManifest.requestCount, 21,
+    "the real-path default is not the bounded seven-request shape repeated three times");
+  assert.deepEqual(projectionManifest.sequences, {
+    projectionBranch: [
+      "raw-projection", "folded-projection", "expanded-projection", "refolded-projection",
+    ],
+    temporaryCarrier: [
+      "prefix-warm", "temporary-carrier-present", "temporary-carrier-withdrawn",
+    ],
+  });
+  assert.equal(new Set(projectionPlan.plans.flatMap((repetition) =>
+    repetition.lanes.map((lane) => lane.cacheKey))).size, 6,
+  "a real projection repetition or lane reuses another cache key");
+
+  const [branch, carrierLane] = projectionPlan.plans[0].lanes;
+  const [raw, folded, expanded, refolded] = branch.requests;
+  assert(serializedItemPrefix(raw.agentMessages, expanded.agentMessages),
+    "expanded context does not begin with the prior raw production projection");
+  assert(serializedItemPrefix(folded.agentMessages, refolded.agentMessages),
+    "refolded context does not begin with the prior folded production projection");
+  assert.notDeepEqual(raw.agentMessages, folded.agentMessages,
+    "the production fold did not change its target span");
+  assert(JSON.stringify(raw.agentMessages[branch.targetIndex]).includes("RAW-MIDDLE-"),
+    "the raw production projection lost its exact target evidence");
+  assert(JSON.stringify(folded.agentMessages[branch.targetIndex])
+    .includes(`[pi-fold active-context fold ${branch.foldId}]`),
+  "the folded production projection does not carry the shipped placeholder");
+  assert(!JSON.stringify(folded.agentMessages[branch.targetIndex]).includes("RAW-MIDDLE-"),
+    "the folded production projection leaked the raw target payload");
+  assert.equal(branch.expectedPeekSourceSha256.length, 64,
+    "the production peek fixture lost its exact source digest");
+  assert(JSON.stringify(branch.peekResult).includes(branch.expectedPeekSourceSha256),
+    "the production peek result does not carry its exact source digest");
+  assert(!JSON.stringify(folded.llmMessages).includes(branch.expectedPeekSourceSha256),
+    "the folded request leaks the value reserved for a later production peek");
+  assert(raw.llmMessages[0].content[0].text.length > 8_192,
+    "the real branch prefix is too small to cross the cache minimum");
+  assert.notDeepEqual(projectionPlan.plans[0].lanes[0].requests[0].llmMessages[0],
+    projectionPlan.plans[1].lanes[0].requests[0].llmMessages[0],
+  "real projection repetitions are not isolated near the start of the message prefix");
+
+  const [warm, present, withdrawn] = carrierLane.requests;
+  const carrier = present.agentMessages.at(-1);
+  assert.equal(carrier.role, "custom");
+  assert.equal(carrier.display, false);
+  assert.equal(carrier.details.ephemeral, true);
+  assert(serializedItemPrefix(warm.agentMessages, present.agentMessages));
+  assert(serializedItemPrefix(warm.agentMessages, withdrawn.agentMessages));
+  assert(serializedItemPrefix(present.agentMessages.slice(0, -1), withdrawn.agentMessages),
+    "withdrawing the carrier changed its durable production prefix");
+  assert(JSON.stringify(present.llmMessages).includes("TEMPORARY-CARRIER-"),
+    "Pi's convertToLlm did not serialize the custom carrier");
+  assert(!JSON.stringify(withdrawn.llmMessages).includes("TEMPORARY-CARRIER-"),
+    "Pi's convertToLlm retained the withdrawn custom carrier");
+
+  const llmInputs = new Map(projectionPlan.plans[0].lanes.flatMap((lane) =>
+    lane.requests.map((request) => [request.label, request.llmMessages])));
+  const offlineTopology = serializedProjectionTopology(1, llmInputs);
+  assert.equal(offlineTopology.confirmed, true);
+  assert.equal(offlineTopology.rawPrefixOfExpanded, true);
+  assert.equal(offlineTopology.foldedPrefixOfRefolded, true);
+  assert(offlineTopology.carrierWithdrawalCommonItems >= offlineTopology.warmItems);
+  const brokenTopologyInputs = new Map(llmInputs);
+  brokenTopologyInputs.set("expanded-projection", expanded.llmMessages.slice(1));
+  assert.equal(serializedProjectionTopology(1, brokenTopologyInputs).confirmed, false,
+    "the topology check accepts an expanded request that lost the raw prefix");
+
+  assert.equal(assertSerializedSubscriptionProjectionPayload({
+    input: present.llmMessages,
+    prompt_cache_key: carrierLane.cacheKey,
+    tool_choice: "none",
+  }, {
+    cacheKey: carrierLane.cacheKey,
+    expectation: present.expectation,
+  }).inputItems, present.llmMessages.length);
+  assert.throws(() => assertSerializedSubscriptionProjectionPayload({
+    input: withdrawn.llmMessages,
+    prompt_cache_key: carrierLane.cacheKey,
+    tool_choice: "none",
+  }, {
+    cacheKey: carrierLane.cacheKey,
+    expectation: present.expectation,
+  }), /lost expected marker/);
+
+  const cacheRows = [];
+  const observedReads = {
+    "raw-projection": 0,
+    "folded-projection": 3_072,
+    "expanded-projection": 11_264,
+    "refolded-projection": 7_936,
+    "prefix-warm": 0,
+    "temporary-carrier-present": 5_120,
+    "temporary-carrier-withdrawn": 5_632,
+  };
+  const topologies = [];
+  for (let repetition = 1; repetition <= 3; repetition += 1) {
+    for (const [label, cacheRead] of Object.entries(observedReads)) {
+      cacheRows.push({
+        repetition,
+        label,
+        httpStatus: 200,
+        stopReason: "stop",
+        usage: { cacheRead: cacheRead + (repetition - 1) * 128 },
+      });
+    }
+    topologies.push({ repetition, complete: true, confirmed: true });
+  }
+  const firstCache = classifySubscriptionCacheProjectionRepetition(
+    cacheRows.filter((row) => row.repetition === 1));
+  assert.equal(firstCache.expandedBeyondFork, 8_192);
+  assert.equal(firstCache.refoldedBeyondFork, 4_864);
+  assert.equal(firstCache.projectionBranchRevisitConfirmed, true);
+  assert.equal(firstCache.temporaryCarrierWithdrawalConfirmed, true);
+  const zeroSharedFork = cacheRows.filter((row) => row.repetition === 1)
+    .map((row) => row.label === "folded-projection"
+      ? { ...row, usage: { cacheRead: 0 } }
+      : row);
+  const zeroSharedForkVerdict = classifySubscriptionCacheProjectionRepetition(zeroSharedFork);
+  assert.equal(zeroSharedForkVerdict.sharedPrefixObserved, false);
+  assert.equal(zeroSharedForkVerdict.projectionBranchRevisitConfirmed, true,
+    "zero cache at the first branch switch vetoes direct cache reads on both revisits");
+  const cacheSummary = summarizeSubscriptionCacheProjection(cacheRows, 3, topologies);
+  assert.equal(cacheSummary.confirmedRepetitions, 3);
+  assert.equal(cacheSummary.promotionEligible, true);
+  assert.equal(summarizeSubscriptionCacheProjection(
+    cacheRows.filter((row) => row.repetition === 1), 1, [topologies[0]]).promotionEligible,
+  false, "one successful real projection session incorrectly promotes a cache assumption");
+  assert.equal(summarizeSubscriptionCacheProjection(cacheRows, 3, []).promotionEligible, false,
+    "cache reads promote the claim without observed provider serialization topology");
+  const noExpandedBranch = cacheRows.filter((row) => row.repetition === 1)
+    .map((row) => row.label === "expanded-projection"
+      ? { ...row, usage: { cacheRead: firstCache.sharedForkRead } }
+      : row);
+  assert.equal(classifySubscriptionCacheProjectionRepetition(noExpandedBranch)
+    .projectionBranchRevisitConfirmed, false,
+  "a cache read ending at the shared fork is mistaken for an expanded branch revisit");
+  const carrierLoss = cacheRows.filter((row) => row.repetition === 1)
+    .map((row) => row.label === "temporary-carrier-withdrawn"
+      ? { ...row, usage: { cacheRead: 1_024 } }
+      : row);
+  assert.equal(classifySubscriptionCacheProjectionRepetition(carrierLoss)
+    .temporaryCarrierWithdrawalConfirmed, false,
+  "carrier withdrawal is called safe after losing part of the prior stable-prefix read");
+
+  const projectionProbeSource = source("scripts/probe_subscription_cache_projection.mjs");
+  assert(!projectionProbeSource.includes("OPENAI_API_KEY") &&
+    !projectionProbeSource.includes("api.openai.com"),
+  "the real projection probe contains a direct OpenAI API path");
+  assert(!/\bmaxTokens\s*:/.test(projectionProbeSource),
+    "the real projection probe supplies a provider output ceiling");
+  assert(projectionProbeSource.includes("manualFoldCandidate") &&
+    projectionProbeSource.includes("commitPreparedFold") &&
+    projectionProbeSource.includes("setFoldProjectionState") &&
+    projectionProbeSource.includes("projectActiveContext"),
+  "the real projection probe bypasses the shipped fold constructors");
+  assert(projectionProbeSource.includes("convertToLlm") &&
+    projectionProbeSource.includes("return payload;") &&
+    !projectionProbeSource.includes("input: request.input"),
+  "the real projection probe does not preserve Pi's serializer payload");
+  assert(projectionProbeSource.includes('transport: "sse"') &&
+    projectionProbeSource.includes('cacheRetention: "short"') &&
+    projectionProbeSource.includes('toolChoice: "none"') &&
+    projectionProbeSource.includes("maxRetries: 0"),
+  "the real projection live path does not pin the measured subscription transport");
+  const projectionDryRun = spawnSync(process.execPath,
+    [join(PROJECT, "scripts", "probe_subscription_cache_projection.mjs"), "--repetitions=1"],
+    { encoding: "utf8" });
+  assert.equal(projectionDryRun.status, 0, projectionDryRun.stderr);
+  const projectionDryReport = JSON.parse(projectionDryRun.stdout);
+  assert.equal(projectionDryReport.live, false);
+  assert.equal(projectionDryReport.networkRequests, 0);
+  assert.equal(projectionDryReport.manifest.requestCount, 7);
+
+  checks.theRealProjectionCacheProbePinsPiSerializationAndCarrierWithdrawal = true;
+}
+
+// GATE 76 - a one-request suggestion carrier gets a selector-free uptake trial.
+//
+// The relevant condition uses a perfect oracle: the exact answer exists only in the real
+// production peek result, and the carrier names that fold. The irrelevant control already
+// contains its answer and must not peek. This isolates the carrier from ranking quality,
+// including any BM25 threshold. A taken carrier is withdrawn from the durable follow-up,
+// whose cache read must still cross the provider's minimum. Nothing here promotes a selector
+// or adds an option to the shipped runtime.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(EPHEMERAL_SUGGESTION_PROTOCOL_VERSION, 1);
+  const suggestionPlan = await buildEphemeralSuggestionPlan({
+    nonce: "0123456789abcdef",
+    repetitions: SUBSCRIPTION_CACHE_DEFAULT_REPETITIONS,
+  });
+  const suggestionManifest = ephemeralSuggestionManifest(suggestionPlan);
+  assert.equal(suggestionManifest.initialRequests, 6);
+  assert.equal(suggestionManifest.maximumRequests, 9);
+  assert.equal(suggestionManifest.selector, "perfect-oracle fixture only");
+  assert.deepEqual(suggestionManifest.conditions,
+    [EPHEMERAL_SUGGESTION_RELEVANT_LANE, EPHEMERAL_SUGGESTION_IRRELEVANT_LANE]);
+  assert.equal(new Set(suggestionPlan.plans.flatMap((repetition) =>
+    repetition.lanes.map((lane) => lane.cacheKey))).size, 6,
+  "a suggestion condition or repetition reuses another cache key");
+
+  const relevant = suggestionPlan.plans[0].lanes.find((lane) =>
+    lane.condition === EPHEMERAL_SUGGESTION_RELEVANT_LANE);
+  const irrelevant = suggestionPlan.plans[0].lanes.find((lane) =>
+    lane.condition === EPHEMERAL_SUGGESTION_IRRELEVANT_LANE);
+  assert(relevant && irrelevant, "the suggestion plan lost one of its two conditions");
+  const carrier = relevant.firstAgentMessages.at(-1);
+  assert.equal(carrier.role, "custom");
+  assert.equal(carrier.display, false);
+  assert.equal(carrier.details.ephemeral, true);
+  assert.equal(carrier.details.selector, "perfect-oracle");
+  assert.equal(carrier.details.foldId, relevant.foldId);
+  assert.deepEqual(relevant.firstAgentMessages.slice(0, -1), relevant.durableAgentMessages,
+    "the one-request carrier changed the durable production projection");
+  assert(JSON.stringify(relevant.firstMessages).includes(relevant.marker),
+    "Pi's message conversion dropped the one-request suggestion");
+  assert(!JSON.stringify(relevant.durableAgentMessages).includes(relevant.marker),
+    "the suggestion carrier entered durable context");
+  assert(JSON.stringify(relevant.durableAgentMessages)
+    .includes(`[pi-fold active-context fold ${relevant.foldId}]`),
+  "the suggestion fixture does not contain a shipped production fold");
+  assert(!JSON.stringify(relevant.firstMessages).includes(relevant.expectedAnswer),
+    "the relevant request leaks the exact answer before peek");
+  assert(JSON.stringify(relevant.peekResult).includes(relevant.expectedAnswer),
+    "the real production peek result does not reveal the withheld answer");
+  assert(JSON.stringify(irrelevant.firstMessages).includes(irrelevant.expectedAnswer),
+    "the irrelevant control does not make its answer directly visible");
+
+  const foldTool = suggestionPlan.tools.find((tool) => tool.name === "pi_fold_context");
+  assert(foldTool, "the suggestion plan does not expose the shipped fold tool");
+  assert(foldTool.parameters.properties.action.enum.includes("peek"),
+    "the suggestion plan's shipped fold tool cannot perform the requested peek");
+  const correctMessage = {
+    content: [{
+      type: "toolCall",
+      id: "peek-call",
+      name: "pi_fold_context",
+      arguments: { action: "peek", id: relevant.foldId },
+    }],
+  };
+  assert.equal(correctPeekCall(correctMessage, relevant.foldId)?.id, "peek-call");
+  assert.equal(correctPeekCall({
+    content: [{ ...correctMessage.content[0], arguments: { action: "expand", id: relevant.foldId } }],
+  }, relevant.foldId), null, "an expand is mistaken for uptake of a peek suggestion");
+  assert.equal(correctPeekCall({
+    content: [{ ...correctMessage.content[0], arguments: { action: "peek", id: "wrong-fold" } }],
+  }, relevant.foldId), null, "a peek of another fold is mistaken for suggestion uptake");
+  assert.equal(correctPeekCall({
+    content: [...correctMessage.content, { ...correctMessage.content[0], id: "extra-call" }],
+  }, relevant.foldId), null, "a multi-call turn is mistaken for exact suggestion uptake");
+  assert.equal(normalizedExactAnswer(`\`${relevant.expectedAnswer}\``), relevant.expectedAnswer);
+  assert.equal(normalizedExactAnswer(`"${relevant.expectedAnswer}"`), relevant.expectedAnswer);
+
+  assert.equal(assertEphemeralSuggestionPayload({
+    prompt_cache_key: relevant.cacheKey,
+    tool_choice: "auto",
+    input: relevant.firstMessages,
+  }, {
+    cacheKey: relevant.cacheKey,
+    marker: relevant.marker,
+    carrierPresent: true,
+    expectedAnswer: relevant.expectedAnswer,
+    answerPresent: false,
+  }).inputItems, relevant.firstMessages.length);
+  const cleanFollowupInput = [{
+    type: "message",
+    role: "tool",
+    content: [{ type: "input_text", text: relevant.expectedAnswer }],
+  }];
+  assertEphemeralSuggestionPayload({
+    prompt_cache_key: relevant.cacheKey,
+    tool_choice: "auto",
+    input: cleanFollowupInput,
+  }, {
+    cacheKey: relevant.cacheKey,
+    marker: relevant.marker,
+    carrierPresent: false,
+    expectedAnswer: relevant.expectedAnswer,
+    answerPresent: true,
+  });
+  assert.throws(() => assertEphemeralSuggestionPayload({
+    prompt_cache_key: relevant.cacheKey,
+    tool_choice: "none",
+    input: relevant.firstMessages,
+  }, {
+    cacheKey: relevant.cacheKey,
+    marker: relevant.marker,
+    carrierPresent: true,
+    expectedAnswer: relevant.expectedAnswer,
+    answerPresent: false,
+  }), /automatic tool choice/);
+  assert.throws(() => assertEphemeralSuggestionPayload({
+    prompt_cache_key: relevant.cacheKey,
+    tool_choice: "auto",
+    input: [...cleanFollowupInput, { text: relevant.marker }],
+  }, {
+    cacheKey: relevant.cacheKey,
+    marker: relevant.marker,
+    carrierPresent: false,
+    expectedAnswer: relevant.expectedAnswer,
+    answerPresent: true,
+  }), /retained the one-request suggestion carrier/);
+  assert.throws(() => assertEphemeralSuggestionPayload({
+    prompt_cache_key: relevant.cacheKey,
+    tool_choice: "auto",
+    input: [...relevant.firstMessages, { text: relevant.expectedAnswer }],
+  }, {
+    cacheKey: relevant.cacheKey,
+    marker: relevant.marker,
+    carrierPresent: true,
+    expectedAnswer: relevant.expectedAnswer,
+    answerPresent: false,
+  }), /leaked its expected evidence before peek/);
+
+  const confirmedTrial = (repetition) => ({
+    repetition,
+    relevant: {
+      correctPeek: true,
+      exactAnswer: true,
+      carrierAbsentFromFollowup: true,
+      followupRow: { usage: { cacheRead: 4_096 } },
+    },
+    irrelevant: { toolCallCount: 0, exactAnswer: true },
+  });
+  const confirmed = classifyEphemeralSuggestionRepetition(confirmedTrial(1));
+  assert.equal(confirmed.relevantTaken, true);
+  assert.equal(confirmed.relevantUsed, true);
+  assert.equal(confirmed.carrierWithdrawn, true);
+  assert.equal(confirmed.followupCachePreserved, true);
+  assert.equal(confirmed.irrelevantIgnored, true);
+  assert.equal(confirmed.confirmed, true);
+  assert.equal(summarizeEphemeralSuggestionTrials(
+    [confirmedTrial(1), confirmedTrial(2), confirmedTrial(3)], 3).promotionEligible, true);
+  assert.equal(summarizeEphemeralSuggestionTrials([confirmedTrial(1)], 1).promotionEligible, false,
+    "one successful suggestion trial incorrectly promotes the carrier");
+  assert.equal(classifyEphemeralSuggestionRepetition({
+    ...confirmedTrial(1),
+    relevant: { ...confirmedTrial(1).relevant, correctPeek: false },
+  }).confirmed, false, "an ignored relevant suggestion passes");
+  assert.equal(classifyEphemeralSuggestionRepetition({
+    ...confirmedTrial(1),
+    irrelevant: { toolCallCount: 1, exactAnswer: true },
+  }).confirmed, false, "an irrelevant false-positive peek passes");
+  assert.equal(classifyEphemeralSuggestionRepetition({
+    ...confirmedTrial(1),
+    relevant: {
+      ...confirmedTrial(1).relevant,
+      followupRow: { usage: { cacheRead: SUBSCRIPTION_CACHE_MINIMUM_TOKENS - 1 } },
+    },
+  }).confirmed, false, "carrier withdrawal passes without a cacheable follow-up read");
+
+  const suggestionSource = source("scripts/probe_subscription_ephemeral_suggestion.mjs");
+  assert(!suggestionSource.includes("OPENAI_API_KEY") &&
+    !suggestionSource.includes("api.openai.com"),
+  "the suggestion probe contains a direct OpenAI API path");
+  assert(!/\bmaxTokens\s*:/.test(suggestionSource),
+    "the suggestion probe supplies a provider output ceiling");
+  assert(suggestionSource.includes('selector: "perfect-oracle"') &&
+    suggestionSource.includes('toolChoice: "auto"'),
+  "the suggestion probe does not isolate its oracle selector and automatic tool choice");
+  assert(suggestionSource.includes('transport: "sse"') &&
+    suggestionSource.includes('cacheRetention: "short"') &&
+    suggestionSource.includes("maxRetries: 0") &&
+    suggestionSource.includes("return payload;"),
+  "the live suggestion path does not pin and preserve the subscription payload");
+  const suggestionDryRun = spawnSync(process.execPath,
+    [join(PROJECT, "scripts", "probe_subscription_ephemeral_suggestion.mjs"), "--repetitions=1"],
+    { encoding: "utf8" });
+  assert.equal(suggestionDryRun.status, 0, suggestionDryRun.stderr);
+  const suggestionDryReport = JSON.parse(suggestionDryRun.stdout);
+  assert.equal(suggestionDryReport.live, false);
+  assert.equal(suggestionDryReport.networkRequests, 0);
+  assert.equal(suggestionDryReport.manifest.initialRequests, 2);
+  assert.equal(suggestionDryReport.manifest.maximumRequests, 3);
+
+checks.aPerfectOracleSuggestionMeasuresEphemeralCarrierUptakeWithoutJudgingSelectors = true;
+}
+
+// GATE 77 - the first retrieval scorer is a complete, carrier-free shadow table.
+//
+// This reconstructs the deleted selector's BM25 geometry over every eligible fold. Labels
+// cannot enter the pure scorer, candidate order cannot move a score or tie-break, and score
+// zero is still a row. The historical content cap is not hidden: the summary names query-level
+// carrier loss beyond it. This gate promotes neither a threshold nor a shipped retrieval path.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(RETRIEVAL_SHADOW_PROTOCOL_VERSION, 1);
+  assert.equal(RETRIEVAL_SHADOW_SCORER_ID, "bm25-content-brief-v1");
+  assert.equal(RETRIEVAL_SHADOW_CONTENT_CHARS, 20_000);
+  assert.equal(RETRIEVAL_SHADOW_BM25_K1, 1.5);
+  assert.equal(RETRIEVAL_SHADOW_BM25_B, 0.75);
+
+  const candidates = [
+    {
+      id: "fold-a",
+      brief: "A compact unrelated summary.",
+      scoredContent: "alpha target path and exact evidence",
+    },
+    {
+      id: "fold-b",
+      brief: "alpha target path",
+      scoredContent: "historical background without the requested evidence",
+    },
+    {
+      id: "fold-c",
+      brief: "quiet appendix",
+      scoredContent: "omega destination record",
+    },
+  ];
+  const scored = scoreRetrievalShadowCandidates({ query: "alpha target path", candidates });
+  assert.equal(scored.rows.length, candidates.length,
+    "the retrieval shadow omitted a candidate row");
+  assert.deepEqual(scored.rows.map((row) => row.id), ["fold-a", "fold-b", "fold-c"]);
+  assert.equal(scored.corpus.documents, candidates.length * 2);
+  assert.match(scored.corpus.documentFrequencySha256, /^[a-f0-9]{64}$/);
+  assert.equal(scored.rows.find((row) => row.id === "fold-a").rawContentRank, 1);
+  assert.equal(scored.rows.find((row) => row.id === "fold-b").briefRank, 1);
+  assert.equal(scored.rows.find((row) => row.id === "fold-c").rawContentScore, 0,
+    "a zero-score candidate disappeared from the shadow table");
+
+  const reordered = scoreRetrievalShadowCandidates({
+    query: "alpha target path",
+    candidates: [...candidates].reverse(),
+  });
+  assert.deepEqual(reordered, scored,
+    "candidate input order changed the retrieval shadow result");
+  const labelMutation = scoreRetrievalShadowCandidates({
+    query: "alpha target path",
+    candidates: candidates.map((candidate, index) => ({
+      ...candidate,
+      relevant: index === 2,
+      expectedAnswer: `answer-${index}`,
+      answerVerdict: index === 0 ? "correct" : "wrong",
+    })),
+  });
+  assert.deepEqual(labelMutation, scored,
+    "answer or relevance metadata reached the retrieval scorer");
+  const changedQuery = scoreRetrievalShadowCandidates({
+    query: "omega destination record",
+    candidates,
+  });
+  assert.equal(changedQuery.rows.find((row) => row.id === "fold-c").rawContentRank, 1,
+    "the retrieval rank does not respond to its explicit query");
+
+  const ranked = new Map(scored.rows.map((row) => [row.id, row]));
+  const query = ({ id, retrievalNeeded, carriage, relevantId, labelInScoredContent }) => ({
+    runId: "sealed-fixture",
+    queryId: id,
+    kind: "fixture:atomic",
+    retrievalNeeded,
+    carriage,
+    candidates: candidates.map((candidate, index) => ({
+      ...ranked.get(candidate.id),
+      newestRank: candidates.length - index,
+      relevant: candidate.id === relevantId,
+      labelInScoredContent: candidate.id === relevantId && labelInScoredContent,
+    })),
+  });
+  const summary = summarizeRetrievalShadowQueries([
+    query({
+      id: "inside-cap", retrievalNeeded: true, carriage: "recoverable",
+      relevantId: "fold-a", labelInScoredContent: true,
+    }),
+    query({
+      id: "outside-cap", retrievalNeeded: true, carriage: "recoverable",
+      relevantId: "fold-b", labelInScoredContent: false,
+    }),
+    query({
+      id: "already-visible", retrievalNeeded: false, carriage: "visible-raw",
+      relevantId: "fold-a", labelInScoredContent: true,
+    }),
+  ]);
+  assert.equal(summary.queries, 3);
+  assert.equal(summary.candidateRows, 9);
+  assert.equal(summary.retrievalNeededQueries, 2);
+  assert.equal(summary.scoringCapCoverage.retrievalNeededWithRelevantCarrierInCap, 1);
+  assert.equal(summary.scoringCapCoverage.retrievalNeededWithEveryRelevantCarrierOutsideCap, 1);
+  assert.equal(summary.thresholdSweeps.content.descriptiveOnly, true);
+  assert.equal(summary.thresholdSweeps.margin.descriptiveOnly, true);
+
+  const shadowSource = source("scripts/probe_retrieval_shadow.mjs");
+  assert(!shadowSource.includes("api.openai.com") &&
+    !shadowSource.includes("OPENAI_API_KEY") &&
+    !shadowSource.includes("fetch("),
+  "the offline retrieval shadow contains a provider or network path");
+  assert(!shadowSource.includes("context.suggestion") &&
+    !shadowSource.includes("registerTool") &&
+    !shadowSource.includes("registerMessageRenderer"),
+  "the retrieval shadow gained a carrier or shipped runtime surface");
+  assert(shadowSource.includes("active-context mark nomination is outside this build") &&
+    shadowSource.includes("thresholds are not promoted on this corpus"),
+  "the retrieval shadow does not state its experiment-only boundary");
+  const shadowHelp = spawnSync(process.execPath,
+    [join(PROJECT, "scripts", "probe_retrieval_shadow.mjs"), "--help"],
+    { encoding: "utf8" });
+  assert.equal(shadowHelp.status, 0, shadowHelp.stderr);
+  assert.match(shadowHelp.stdout, /no provider or network calls/);
+
+checks.aCompleteRetrievalShadowReconstructsBm25WithoutPromotingACarrierOrThreshold = true;
+}
+
+// GATE 78 - a local attention shadow reads tensors without first selecting candidates.
+//
+// The dry run is standard-library only and cannot load a model or touch the network. The live
+// path gives every candidate's complete supplied text to one forward-only prompt, asks eager
+// attention for the full stack, and refuses model-context overflow instead of trimming it. The
+// controlled fixture rotates all candidates through all positions; labels join only after the
+// tensor score. This gate promotes neither a scorer threshold nor a runtime carrier.
+// ---------------------------------------------------------------------------
+{
+  const attentionScript = join(PROJECT, "scripts", "probe_attention_shadow.py");
+  const attentionFixture = join(PROJECT, "scripts", "fixtures", "attention_shadow_v1.json");
+  const attentionDryRun = spawnSync("python3", [attentionScript], { encoding: "utf8" });
+  assert.equal(attentionDryRun.status, 0, attentionDryRun.stderr);
+  const dry = JSON.parse(attentionDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId, "qwen3-readout-attention-density-v1");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied candidates in every forward pass");
+  assert.equal(dry.contract.candidateContent, "complete supplied content");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal("labelsVisibleToScorers" in dry.contract, false);
+
+  const fixture = JSON.parse(readFileSync(attentionFixture, "utf8"));
+  const ids = fixture.candidates.map((candidate) => candidate.id);
+  assert.equal(dry.contract.forwardPasses, fixture.cases.length * ids.length);
+  assert.equal(dry.contract.candidateOrders.length, ids.length);
+  for (const candidateId of ids) {
+    assert.deepEqual(dry.contract.candidateOrders.map((order) => order.indexOf(candidateId)).sort(),
+      ids.map((_, index) => index),
+      `${candidateId} did not occupy every attention fixture position`);
+  }
+
+  const attentionSource = readFileSync(attentionScript, "utf8");
+  assert(attentionSource.includes("truncation=False") &&
+    attentionSource.includes("output_attentions=True") &&
+    attentionSource.includes("use_cache=False") &&
+    attentionSource.includes('attn_implementation="eager"'),
+  "the attention shadow no longer requests complete eager forward-pass tensors");
+  assert(attentionSource.includes("attention-shadow-input-exceeds-model-context") &&
+    attentionSource.includes("attention-shadow-incomplete-attention-stack"),
+  "the attention shadow does not fail loudly on incomplete input or tensors");
+  assert(!attentionSource.includes(".generate(") &&
+    !attentionSource.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(attentionSource),
+  "the attention shadow gained generation or a lexical prefilter");
+  assert(!attentionSource.includes("registerTool") &&
+    !attentionSource.includes("context.suggestion") &&
+    !attentionSource.includes('from "../extensions') &&
+    !attentionSource.includes("api.openai.com"),
+  "the attention shadow gained a carrier, shipped runtime path, or provider call");
+
+checks.aLocalAttentionShadowScoresEveryCompleteCandidateWithoutGenerationOrPrefilter = true;
+}
+
+// GATE 79 - the attention decision policy is selective, precision-first, and held out.
+//
+// The scorer stays byte-for-byte outside this build. A development-only sweep may choose a
+// density-share threshold only after at least four offers with no observed false offer. That
+// threshold freezes before the disjoint, negative-heavy validation split is evaluated. The
+// dry gate exercises calibration without loading a model and promotes neither a threshold nor
+// a carrier.
+// ---------------------------------------------------------------------------
+{
+  const selectiveScript = join(PROJECT, "scripts", "probe_attention_selective.py");
+  const selectiveFixture = join(PROJECT, "scripts", "fixtures", "attention_selective_v1.json");
+  const selectiveDryRun = spawnSync("python3", [selectiveScript], { encoding: "utf8" });
+  assert.equal(selectiveDryRun.status, 0, selectiveDryRun.stderr);
+  const dry = JSON.parse(selectiveDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId, "qwen3-readout-attention-density-v1");
+  assert.equal(dry.contract.policyId, "top-density-share-abstention-v1");
+  assert.equal(dry.contract.confidenceScalar, "top candidate densityShare");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied candidates in every forward pass");
+  assert.equal(dry.contract.candidateContent, "complete supplied content");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.match(dry.contract.validation, /threshold frozen before validation labels/);
+  assert.match(dry.contract.boundary, /no carrier, runtime mutation, scorer change/);
+  assert.deepEqual(dry.calibrationSelfTest, { threshold: 0.6, offers: 4, precision: 1 });
+
+  const fixture = JSON.parse(readFileSync(selectiveFixture, "utf8"));
+  const developmentIds = new Set(
+    fixture.splits.development.candidates.map((candidate) => candidate.id));
+  const validationIds = new Set(
+    fixture.splits.validation.candidates.map((candidate) => candidate.id));
+  assert([...developmentIds].every((candidateId) => !validationIds.has(candidateId)),
+    "the attention abstention development and validation candidates overlap");
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.candidates, 8);
+    assert.equal(split.turns, 40);
+    assert.equal(split.positiveRate, 0.2);
+    assert.equal(split.classes.positive, 8);
+    assert.equal(split.classes["no-relevant"], 8);
+    assert.equal(split.classes["already-visible"], 8);
+    assert.equal(split.classes["semantically-related-but-non-answering"], 8);
+    assert.equal(split.classes["interruption-not-worthwhile"], 8);
+  }
+
+  const selectiveSource = readFileSync(selectiveScript, "utf8");
+  assert(selectiveSource.includes("output_attentions=True") &&
+    selectiveSource.includes("use_cache=False") &&
+    selectiveSource.includes('attn_implementation="eager"'),
+  "the selective policy no longer uses the fixed eager attention scorer");
+  assert(selectiveSource.includes("MIN_DEVELOPMENT_OFFERS = 4") &&
+    selectiveSource.includes("DEVELOPMENT_REQUIRED_PRECISION = 1.0") &&
+    selectiveSource.includes('"source": "development only"'),
+  "the selective policy weakened its precision-first calibration contract");
+  assert(!selectiveSource.includes(".generate(") &&
+    !selectiveSource.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(selectiveSource),
+  "the selective policy gained generation or a lexical prefilter");
+  assert(!selectiveSource.includes("registerTool") &&
+    !selectiveSource.includes("context.suggestion") &&
+    !selectiveSource.includes('from "../extensions') &&
+    !selectiveSource.includes("api.openai.com"),
+  "the selective policy gained a carrier, shipped runtime path, or provider call");
+
+  checks.aPrecisionFirstAttentionPolicyCalibratesOnDevelopmentAndAbstainsOnValidation = true;
+}
+
+// GATE 80 - query-erasure contrast seeks only jointly necessary and correct offers.
+//
+// One scorer mechanism changes: every actual-query forward is paired with a query-erased
+// forward whose token count and positions are identical. Candidate query lift is the log ratio
+// of those densities. The precision label is the whole action, so a wrong candidate on a
+// positive turn is false just like any offer on a no-retrieval turn. Development must find four
+// zero-false offers before validation runs at all. Recall and latency cannot promote the score.
+// ---------------------------------------------------------------------------
+{
+  const contrastScript = join(PROJECT, "scripts", "probe_attention_contrastive.py");
+  const contrastFixture = join(PROJECT, "scripts", "fixtures", "attention_contrastive_v1.json");
+  const contrastDryRun = spawnSync("python3", [contrastScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(contrastDryRun.status, 0, contrastDryRun.stderr);
+  const dry = JSON.parse(contrastDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId, "qwen3-query-erasure-attention-v1");
+  assert.equal(dry.contract.policyId, "zero-false-joint-action-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "minimum of top query lift and top-minus-second query-lift margin");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied candidates in every forward pass");
+  assert.equal(dry.contract.candidateContent, "complete supplied content");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.forwardsPerDecision, 2);
+  assert.match(dry.contract.contrast, /equal-length query-erased baseline/);
+  assert.match(dry.contract.jointCorrectOffer,
+    /retrieval is worthwhile.*selected candidate belongs/);
+  assert.match(dry.contract.everyOtherOffer, /wrong candidate on a positive turn/);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.match(dry.contract.validation, /not run unless development selects a threshold/);
+  assert.equal(dry.contract.primaryOutcome,
+    "zero false offers at nonzero anti-vacuous held-out coverage");
+  assert.deepEqual(dry.contract.nonPromotionalDiagnostics,
+    ["recall", "offer rate", "latency", "memory"]);
+  assert.match(dry.contract.boundary, /one scorer change, no carrier, runtime mutation/);
+  assert.deepEqual(dry.selfTest.contrast, {
+    winnerId: "target",
+    confidencePositive: true,
+    orderInvariant: true,
+  });
+  assert.deepEqual(dry.selfTest.calibration, {
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+  });
+
+  const fixture = JSON.parse(readFileSync(contrastFixture, "utf8"));
+  assert.equal(fixture.fixtureId, "query-erasure-joint-precision-v1");
+  const developmentIds = new Set(
+    fixture.splits.development.candidates.map((candidate) => candidate.id));
+  const validationIds = new Set(
+    fixture.splits.validation.candidates.map((candidate) => candidate.id));
+  assert([...developmentIds].every((candidateId) => !validationIds.has(candidateId)),
+    "the query-erasure development and validation candidates overlap");
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.candidates, 8);
+    assert.equal(split.turns, 40);
+    assert.equal(split.positiveRate, 0.2);
+    assert.equal(split.classes.positive, 8);
+    assert.equal(split.classes["no-relevant"], 8);
+    assert.equal(split.classes["already-visible"], 8);
+    assert.equal(split.classes["semantically-related-but-non-answering"], 8);
+    assert.equal(split.classes["interruption-not-worthwhile"], 8);
+  }
+
+  const contrastSource = readFileSync(contrastScript, "utf8");
+  assert(contrastSource.includes("truncation=False") &&
+    contrastSource.includes("output_attentions=True") &&
+    contrastSource.includes("use_cache=False") &&
+    contrastSource.includes('attn_implementation="eager"'),
+  "the query-erasure scorer no longer uses complete eager attention");
+  assert(contrastSource.includes(
+    'neutral_encoded["input_ids"][0, query_tokens] = neutral_token_id') &&
+    contrastSource.includes("attention-contrastive-neutral-geometry-drift") &&
+    contrastSource.includes("math.log(actual_density / neutral_density)"),
+  "the query-erasure scorer no longer removes semantics at fixed token geometry");
+  assert(contrastSource.includes('trial["class"] == "positive"') &&
+    contrastSource.includes('winner["id"] in relevant') &&
+    contrastSource.includes('"status": "not-run-no-development-threshold"'),
+  "the contrastive experiment weakened joint correctness or fail-closed validation");
+  assert(!contrastSource.includes(".generate(") &&
+    !contrastSource.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(contrastSource),
+  "the query-erasure scorer gained generation or a lexical prefilter");
+  assert(!contrastSource.includes("registerTool") &&
+    !contrastSource.includes("context.suggestion") &&
+    !contrastSource.includes('from "../extensions') &&
+    !contrastSource.includes("api.openai.com"),
+  "the query-erasure scorer gained a carrier, runtime path, or provider call");
+
+checks.aQueryErasureAttentionRequiresEveryOfferToBeNecessaryAndCorrect = true;
+}
+
+// GATE 81 - an event threshold acts only on complete hierarchical fold expansions.
+//
+// Query-erasure attention remains the fixed per-fold ranker. One new mechanism compares the
+// model's next-token logits for retrieve and skip, and that utility margin is the only scalar
+// allowed to trigger an interruption. Every supplied fold node is measured on every synthetic
+// event snapshot, including descendants beneath collapsed parents. Development requires four
+// zero-false joint actions before the frozen threshold may touch validation. This is still an
+// offline selector: no Pi event hook, carrier, context mutation, cap, or truncation ships here.
+// ---------------------------------------------------------------------------
+{
+  const utilityScript = join(PROJECT, "scripts", "probe_attention_utility.py");
+  const utilityFixture = join(PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const utilityDryRun = spawnSync("python3", [utilityScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(utilityDryRun.status, 0, utilityDryRun.stderr);
+  const dry = JSON.parse(utilityDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.rankerId, "qwen3-query-erasure-attention-v1");
+  assert.equal(dry.contract.utilityScorerId,
+    "qwen3-retrieve-skip-next-token-utility-v1");
+  assert.equal(dry.contract.policyId, "zero-false-fold-expansion-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "retrieve next-token logit minus skip next-token logit");
+  assert.match(dry.contract.interruptWhen, /margin meets or exceeds the frozen threshold/);
+  assert.equal(dry.contract.attemptCadence,
+    "one decision at every supplied eligible event snapshot");
+  assert.deepEqual(dry.contract.eligibleEventKinds,
+    ["user-message", "tool-result", "assistant-message", "stop"]);
+  assert.equal(dry.contract.runtimeEventHook, false);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateAction, "expand exactly one fold id");
+  assert.equal(dry.contract.candidateContent,
+    "complete supplied one-level expansion projection for that fold");
+  assert.match(dry.contract.hierarchy, /every root and nested fold.*never prunes/);
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.deepEqual(dry.contract.forwardsPerDecision, {
+    queryErasureRanker: 2,
+    retrieveSkipUtility: 1,
+    total: 3,
+  });
+  assert.deepEqual(dry.contract.choiceTokens, [" retrieve", " skip"]);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorers, false);
+  assert.match(dry.contract.jointCorrectOffer, /necessary now.*relevant fold/);
+  assert.match(dry.contract.everyOtherOffer, /wrong fold on a positive event/);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.match(dry.contract.validation, /not run unless development selects a threshold/);
+  assert.deepEqual(dry.contract.nonPromotionalDiagnostics,
+    ["recall", "offer rate", "latency", "memory"]);
+  assert.match(dry.contract.boundary, /no carrier, Pi event registration, context mutation/);
+  assert.deepEqual(dry.selfTest, {
+    utilityMargin: 2,
+    unthresholdedChoice: "retrieve",
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(utilityFixture, "utf8"));
+  assert.equal(fixture.fixtureId, "fold-expansion-event-utility-v1");
+  const developmentIds = new Set(
+    fixture.splits.development.folds.map((fold) => fold.foldId));
+  const validationIds = new Set(
+    fixture.splits.validation.folds.map((fold) => fold.foldId));
+  assert([...developmentIds].every((foldId) => !validationIds.has(foldId)),
+    "the fold-expansion utility development and validation folds overlap");
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    const folds = fixture.splits[splitName].folds;
+    const ids = new Set(folds.map((fold) => fold.foldId));
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+    assert.deepEqual(new Set(split.allFoldIds), ids);
+    assert(folds.some((fold) => fold.depth === 2),
+      `${splitName} does not exercise a nested fold below another nested fold`);
+    for (const fold of folds) {
+      assert.deepEqual(Object.keys(fold).sort(),
+        ["cases", "depth", "expandedContent", "foldId", "parentFoldId"]);
+      assert.equal(typeof fold.expandedContent, "string");
+      assert(fold.expandedContent.length > 0);
+      if (fold.parentFoldId !== null) {
+        assert(ids.has(fold.parentFoldId),
+          `${splitName} fold ${fold.foldId} names a missing parent`);
+      }
+      assert.equal(fold.cases.positive.task, fold.cases["already-visible"].task,
+        `${splitName} fold ${fold.foldId} changed the task instead of active context`);
+      assert.notEqual(fold.cases.positive.activeContext,
+        fold.cases["already-visible"].activeContext,
+        `${splitName} fold ${fold.foldId} did not vary active context`);
+    }
+  }
+
+  const utilitySource = readFileSync(utilityScript, "utf8");
+  assert(utilitySource.includes("contrastive.prepare_paired_prompt(") &&
+    utilitySource.includes("contrastive.score_once(") &&
+    utilitySource.includes("contrastive.contrast_rows(actual, neutral)"),
+  "the utility probe no longer fixes query-erasure attention as its fold ranker");
+  assert(utilitySource.includes("outputs.logits[0, -1].float()") &&
+    utilitySource.includes('logits[token_ids["retrieve"]]') &&
+    utilitySource.includes('logits[token_ids["skip"]]') &&
+    utilitySource.includes("retrieve_logit - skip_logit"),
+  "the utility probe no longer derives its event threshold from constrained choice logits");
+  assert(utilitySource.includes("truncation=False") &&
+    utilitySource.includes("attention-utility-ranker-did-not-measure-every-fold") &&
+    utilitySource.includes('set(rank_prompt["candidateTokens"]) == set(fold_ids)'),
+  "the utility probe no longer refuses omitted or truncated hierarchical folds");
+  assert(utilitySource.includes('trial["class"] == "positive"') &&
+    utilitySource.includes('winner["id"] in relevant') &&
+    utilitySource.includes('"status": "not-run-no-development-threshold"'),
+  "the utility experiment weakened joint correctness or fail-closed validation");
+  assert(!utilitySource.includes(".generate(") &&
+    !utilitySource.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(utilitySource) &&
+    !/folds\s*\[:\s*\d+/.test(utilitySource),
+  "the utility experiment gained generation, lexical prefiltering, or a fold cap");
+  assert(!utilitySource.includes("registerTool") &&
+    !utilitySource.includes("context.suggestion") &&
+    !utilitySource.includes('from "../extensions') &&
+    !utilitySource.includes("api.openai.com"),
+  "the utility experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.anEventUtilityThresholdMeasuresEveryCompleteFoldAtEveryDepth = true;
+}
+
+// GATE 82 - every fold carries its own conditional expansion utility.
+//
+// A separate constrained expand-versus-skip prompt now owns both selection and abstention.
+// Every root and nested fold is independently tested against the same active context and task;
+// the largest margin names the fold, and that same margin meets the interruption threshold.
+// There is no separate ranker, prefilter, truncation, fixed fold-count cap, or runtime carrier.
+// Development must produce four zero-false offers before validation can be opened.
+// ---------------------------------------------------------------------------
+{
+  const perFoldScript = join(PROJECT, "scripts", "probe_attention_per_fold_utility.py");
+  const perFoldFixture = join(PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const perFoldDryRun = spawnSync("python3", [perFoldScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(perFoldDryRun.status, 0, perFoldDryRun.stderr);
+  const dry = JSON.parse(perFoldDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId, "qwen3-per-fold-expand-skip-utility-v1");
+  assert.equal(dry.contract.policyId, "zero-false-per-fold-expansion-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold expand next-token logit minus skip next-token logit");
+  assert.match(dry.contract.interruptWhen,
+    /largest per-fold expand-minus-skip margin meets or exceeds the frozen threshold/);
+  assert.equal(dry.contract.attemptCadence,
+    "one decision at every supplied eligible event snapshot");
+  assert.deepEqual(dry.contract.eligibleEventKinds,
+    ["user-message", "tool-result", "assistant-message", "stop"]);
+  assert.equal(dry.contract.runtimeEventHook, false);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.match(dry.contract.candidateAction,
+    /fold with the largest conditional utility margin/);
+  assert.equal(dry.contract.candidateContent,
+    "complete supplied one-level expansion projection for that fold");
+  assert.match(dry.contract.hierarchy,
+    /every root and nested fold is independently scored.*never prunes/);
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.match(dry.contract.forwardsPerDecision,
+    /one independent local-model forward per supplied fold.*varies/);
+  assert.equal(dry.contract.ranker, null);
+  assert.deepEqual(dry.contract.choiceTokens, [" expand", " skip"]);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.match(dry.contract.jointCorrectOffer, /winning fold is necessary now.*relevant/);
+  assert.match(dry.contract.everyOtherOffer, /wrong fold on a positive event/);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert.deepEqual(dry.contract.nonPromotionalDiagnostics,
+    ["recall", "offer rate", "latency", "memory"]);
+  assert.match(dry.contract.boundary,
+    /no carrier, Pi event registration, context mutation/);
+  assert.deepEqual(dry.selfTest, {
+    utilityMargin: 2,
+    unthresholdedChoice: "expand",
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(perFoldFixture, "utf8"));
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    const folds = fixture.splits[splitName].folds;
+    const ids = new Set(folds.map((fold) => fold.foldId));
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+    assert.deepEqual(new Set(split.allFoldIds), ids);
+    assert(folds.some((fold) => fold.depth === 2),
+      `${splitName} does not exercise a descendant below another nested fold`);
+  }
+
+  const source = readFileSync(perFoldScript, "utf8");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes("prepare_fold_prompt(tokenizer, folds_by_id[fold_id], case)") &&
+    source.includes("attention-per-fold-did-not-measure-every-fold"),
+  "the per-fold utility probe no longer scores every hierarchical fold independently");
+  assert(source.includes("outputs.logits[0, -1].float()") &&
+    source.includes('logits[token_ids["expand"]]') &&
+    source.includes('logits[token_ids["skip"]]') &&
+    source.includes("expand_logit - skip_logit"),
+  "the per-fold confidence no longer comes from constrained expand and skip logits");
+  assert(source.includes('sorted(rows, key=lambda row: (-row["utilityMargin"], row["id"]))') &&
+    source.includes('"confidence": winner["utilityMargin"]'),
+  "selection and interruption no longer share the winning per-fold utility margin");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-per-fold-input-exceeds-model-context") &&
+    source.includes('len(prompts) == len(fold_ids)'),
+  "the per-fold utility probe no longer refuses omitted or truncated folds");
+  assert(source.includes('trial["class"] == "positive"') &&
+    source.includes('winner["id"] in relevant') &&
+    source.includes('"status": "not-run-no-development-threshold"'),
+  "the per-fold experiment weakened joint correctness or fail-closed validation");
+  assert(!source.includes("contrastive.prepare_paired_prompt(") &&
+    !source.includes("contrastive.score_once(") &&
+    !source.includes("output_attentions=True"),
+  "the per-fold conditional scorer silently retained a separate attention ranker");
+  assert(!source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the per-fold experiment gained generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the per-fold experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.everyFoldOwnsTheUtilityThatSelectsItAndInterrupts = true;
+}
+
+// GATE 83 - candidate erasure removes the per-fold expansion prior at equal geometry.
+//
+// The actual prompt stays byte-identical to Gate 82. A paired control replaces every token
+// position overlapping the complete candidate content with one ordinary neutral token, while
+// preserving length, attention mask, and every other token position. Actual expand-minus-skip
+// margin minus erased margin is the only ranking and interruption scalar. Every root and nested
+// fold still receives both forwards. Calibration refuses negative thresholds and validation
+// remains unscored unless four development offers are all correct.
+// ---------------------------------------------------------------------------
+{
+  const counterfactualScript = join(
+    PROJECT, "scripts", "probe_attention_per_fold_counterfactual.py");
+  const counterfactualFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const counterfactualDryRun = spawnSync("python3", [counterfactualScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(counterfactualDryRun.status, 0, counterfactualDryRun.stderr);
+  const dry = JSON.parse(counterfactualDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-per-fold-candidate-erased-utility-v1");
+  assert.equal(dry.contract.policyId,
+    "zero-false-candidate-erased-fold-expansion-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold actual expand-minus-skip margin minus candidate-erased margin");
+  assert.match(dry.contract.interruptWhen,
+    /largest nonnegative candidate-erased utility lift.*frozen threshold/);
+  assert.equal(dry.contract.attemptCadence,
+    "one decision at every supplied eligible event snapshot");
+  assert.deepEqual(dry.contract.eligibleEventKinds,
+    ["user-message", "tool-result", "assistant-message", "stop"]);
+  assert.equal(dry.contract.runtimeEventHook, false);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.match(dry.contract.candidateAction,
+    /fold with the largest candidate-erased conditional utility lift/);
+  assert.equal(dry.contract.candidateContent,
+    "complete supplied one-level expansion projection for that fold");
+  assert.match(dry.contract.hierarchy,
+    /every root and nested fold is independently scored.*never prunes/);
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.match(dry.contract.forwardsPerDecision,
+    /two independent local-model forwards per supplied fold.*varies/);
+  assert.equal(dry.contract.ranker, null);
+  assert.deepEqual(dry.contract.choiceTokens, [" expand", " skip"]);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.match(dry.contract.normalization.actual, /complete fold expansion.*frozen/);
+  assert.match(dry.contract.normalization.control,
+    /token id whose character span overlaps candidate content.*preserving input length/);
+  assert.match(dry.contract.normalization.tokenBoundary,
+    /delimiter whitespace.*counted/);
+  assert.equal(dry.contract.normalization.score,
+    "actual expand-minus-skip margin minus candidate-erased expand-minus-skip margin");
+  assert.equal(dry.contract.normalization.minimumEligibleThreshold, 0);
+  assert.match(dry.contract.jointCorrectOffer,
+    /nonnegative candidate-erased lift.*necessary now.*relevant/);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert.deepEqual(dry.contract.nonPromotionalDiagnostics,
+    ["recall", "offer rate", "latency", "memory"]);
+  assert.match(dry.contract.boundary,
+    /no carrier, Pi event registration, context mutation/);
+  assert.deepEqual(dry.selfTest, {
+    counterfactualUtilityMargin: 1,
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    negativeThresholdRefused: true,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(counterfactualFixture, "utf8"));
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    const folds = fixture.splits[splitName].folds;
+    const ids = new Set(folds.map((fold) => fold.foldId));
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+    assert.deepEqual(new Set(split.allFoldIds), ids);
+    assert(folds.some((fold) => fold.depth === 2),
+      `${splitName} does not exercise a descendant below another nested fold`);
+  }
+
+  const source = readFileSync(counterfactualScript, "utf8");
+  assert(source.includes("per_fold.prepare_fold_prompt(tokenizer, fold, case)") &&
+    source.includes('legacy["promptSha256"] == attention.sha256_text(full_prompt)') &&
+    source.includes("attention-counterfactual-actual-prompt-drift"),
+  "the actual counterfactual prompt no longer proves identity with Gate 82");
+  assert(source.includes("return_offsets_mapping=True") &&
+    source.includes("attention.overlapping_token_positions(") &&
+    source.includes('erased_encoded["input_ids"][0, candidate_tokens] = neutral_token_id'),
+  "candidate erasure no longer follows the tokenizer's exact candidate span");
+  assert(source.includes('erased_encoded["input_ids"].shape == encoded["input_ids"].shape') &&
+    source.includes('erased_encoded["attention_mask"].tolist()') &&
+    source.includes("attention-counterfactual-noncandidate-token-changed") &&
+    source.includes("boundary_crossing_tokens"),
+  "the erased control no longer pins equal geometry and every outside token position");
+  assert(source.includes('actual_margin - erased_margin') &&
+    source.includes('row["counterfactualUtilityMargin"]') &&
+    source.includes('"confidence": winner["counterfactualUtilityMargin"]'),
+  "selection and interruption no longer share the candidate-erased utility lift");
+  assert(source.includes('point["threshold"] >= MINIMUM_COUNTERFACTUAL_THRESHOLD') &&
+    source.includes('"status": "not-run-no-development-threshold"') &&
+    source.includes('trial["class"] == "positive"') &&
+    source.includes('winner["id"] in relevant'),
+  "the counterfactual policy admits negative lift or weakened fail-closed correctness");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes('len(prompts) == len(fold_ids)') &&
+    source.includes("attention-counterfactual-did-not-measure-every-fold"),
+  "the candidate-erased scorer no longer measures every hierarchical fold");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-counterfactual-input-exceeds-model-context"),
+  "the counterfactual scorer silently truncates inputs that do not fit");
+  assert(!source.includes("contrastive.prepare_paired_prompt(") &&
+    !source.includes("contrastive.score_once(") &&
+    !source.includes("output_attentions=True"),
+  "candidate erasure silently retained a separate attention ranker");
+  assert(!source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the counterfactual experiment gained generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the counterfactual experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.candidateErasureNormalizesEveryFoldAtEqualTokenGeometry = true;
+}
+
+// GATE 84 - a fold must change answerability, not merely look relevant.
+//
+// Every root and nested fold receives one sufficiency judgment with its complete content and
+// one equal-token active-only control. The transition bottleneck is the smaller of expanded
+// sufficiency and negated active-only sufficiency. A positive threshold therefore requires the
+// fold to change the task from insufficient to sufficient. Development still owes four
+// zero-false offers before validation can be prepared or scored.
+// ---------------------------------------------------------------------------
+{
+  const transitionScript = join(
+    PROJECT, "scripts", "probe_attention_answerability_transition.py");
+  const transitionFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const transitionDryRun = spawnSync("python3", [transitionScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(transitionDryRun.status, 0, transitionDryRun.stderr);
+  const dry = JSON.parse(transitionDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-per-fold-answerability-transition-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-answerability-transition-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold minimum of expanded sufficiency margin and negated active-only sufficiency margin");
+  assert.match(dry.contract.interruptWhen,
+    /largest strictly positive answerability-transition bottleneck.*frozen threshold/);
+  assert.equal(dry.contract.attemptCadence,
+    "one decision at every supplied eligible event snapshot");
+  assert.deepEqual(dry.contract.eligibleEventKinds,
+    ["user-message", "tool-result", "assistant-message", "stop"]);
+  assert.equal(dry.contract.runtimeEventHook, false);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.match(dry.contract.candidateAction,
+    /fold with the largest answerability-transition bottleneck/);
+  assert.equal(dry.contract.candidateContent,
+    "complete supplied one-level expansion projection for that fold");
+  assert.match(dry.contract.hierarchy,
+    /every root and nested fold is independently scored.*never prunes/);
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.match(dry.contract.forwardsPerDecision,
+    /two independent local-model forwards per supplied fold.*varies/);
+  assert.equal(dry.contract.ranker, null);
+  assert.deepEqual(dry.contract.choiceTokens, [" sufficient", " insufficient"]);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.match(dry.contract.judgment,
+    /enough stated evidence.*correctly and completely/);
+  assert.match(dry.contract.transition.expanded,
+    /sufficient logit minus insufficient logit.*complete fold/);
+  assert.match(dry.contract.transition.activeOnlyControl,
+    /token overlapping fold content.*ordinary neutral token id/);
+  assert.match(dry.contract.transition.equalGeometry,
+    /input length, attention mask, and every token outside candidate content.*identical/);
+  assert.equal(dry.contract.transition.answerabilityGain,
+    "expanded sufficiency margin minus active-only sufficiency margin");
+  assert.equal(dry.contract.transition.score,
+    "minimum of expanded sufficiency margin and negated active-only sufficiency margin");
+  assert.match(dry.contract.transition.meaning,
+    /positive score requires.*fold.*sufficient.*active-only control.*insufficient/);
+  assert.equal(dry.contract.transition.minimumThreshold, 0);
+  assert.equal(dry.contract.transition.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.jointCorrectOffer,
+    /strictly positive answerability transition.*necessary now.*relevant/);
+  assert.equal(dry.contract.calibration.source, "development only");
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert.deepEqual(dry.contract.nonPromotionalDiagnostics,
+    ["recall", "offer rate", "latency", "memory"]);
+  assert.match(dry.contract.boundary,
+    /no carrier, Pi event registration, context mutation/);
+  assert.deepEqual(dry.selfTest, {
+    expandedSufficiencyMargin: 2,
+    activeOnlySufficiencyMargin: -1,
+    answerabilityGain: 3,
+    transitionMargin: 1,
+    redundantTransitionMargin: -1,
+    missingCandidateTransitionMargin: -1,
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    zeroThresholdRefused: true,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(transitionFixture, "utf8"));
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    const folds = fixture.splits[splitName].folds;
+    const ids = new Set(folds.map((fold) => fold.foldId));
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+    assert.deepEqual(new Set(split.allFoldIds), ids);
+    assert(folds.some((fold) => fold.depth === 2),
+      `${splitName} does not exercise a descendant below another nested fold`);
+  }
+
+  const source = readFileSync(transitionScript, "utf8");
+  assert(source.includes("return_offsets_mapping=True") &&
+    source.includes("attention.overlapping_token_positions(") &&
+    source.includes('active_only_encoded["input_ids"][0, candidate_tokens] = neutral_token_id'),
+  "the active-only control no longer erases the exact candidate token span");
+  assert(source.includes('active_only_encoded["input_ids"].shape == encoded["input_ids"].shape') &&
+    source.includes('active_only_encoded["attention_mask"].tolist()') &&
+    source.includes("attention-answerability-noncandidate-token-changed") &&
+    source.includes("boundary_crossing_tokens"),
+  "the active-only control no longer preserves equal geometry and every outside token");
+  assert(source.includes('logits[token_ids["sufficient"]]') &&
+    source.includes('logits[token_ids["insufficient"]]') &&
+    source.includes("sufficient_logit - insufficient_logit"),
+  "answerability no longer comes from constrained sufficient and insufficient logits");
+  assert(source.includes('min(expanded_margin, -active_only_margin)') &&
+    source.includes('row["transitionMargin"]') &&
+    source.includes('"confidence": winner["transitionMargin"]'),
+  "selection and interruption no longer share the answerability-transition bottleneck");
+  assert(source.includes('point["threshold"] > MINIMUM_TRANSITION_THRESHOLD') &&
+    source.includes('"status": "not-run-no-development-threshold"') &&
+    source.includes('trial["class"] == "positive"') &&
+    source.includes('winner["id"] in relevant'),
+  "the transition policy admits a nonpositive threshold or weakened correctness");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes('len(prompts) == len(fold_ids)') &&
+    source.includes("attention-answerability-did-not-measure-every-fold"),
+  "the answerability scorer no longer measures every hierarchical fold");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-answerability-input-exceeds-model-context"),
+  "the answerability scorer silently truncates inputs that do not fit");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes("contrastive.prepare_paired_prompt(") &&
+    !source.includes("per_fold.prepare_fold_prompt("),
+  "the transition scorer silently retained a prior ranker or expansion prompt");
+  assert(!source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the transition experiment gained generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the transition experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.answerabilityMustTransitionFromInsufficientToSufficient = true;
+}
+
+// GATE 85 - model capacity changes while the answerability mechanism does not.
+//
+// Qwen3-1.7B NF4 reuses Gate 84's prompt builder, token ids, paired inputs, transition
+// bottleneck, threshold policy, fixture, labels, and validation lock. The live runner refuses
+// any development prompt or token sequence that differs from the sealed 0.6B artifact.
+// ---------------------------------------------------------------------------
+{
+  const capacityScript = join(
+    PROJECT, "scripts", "probe_attention_answerability_capacity.py");
+  const capacityFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const capacityDryRun = spawnSync("python3", [capacityScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(capacityDryRun.status, 0, capacityDryRun.stderr);
+  const dry = JSON.parse(capacityDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-1.7b-nf4-answerability-transition-v1");
+  assert.equal(dry.contract.mechanismScorerId,
+    "qwen3-per-fold-answerability-transition-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-answerability-transition-event-v1");
+  assert.equal(dry.contract.modelOnlyChange, true);
+  assert.equal(dry.contract.model, "Qwen/Qwen3-1.7B");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold minimum of expanded sufficiency margin and negated active-only sufficiency margin");
+  assert.deepEqual(dry.contract.choiceTokens, [" sufficient", " insufficient"]);
+  assert.equal(dry.contract.capacityComparison.baselineModel, "Qwen/Qwen3-0.6B");
+  assert.equal(dry.contract.capacityComparison.candidateModel, "Qwen/Qwen3-1.7B");
+  assert.equal(dry.contract.capacityComparison.baselineParametersBillions, 0.6);
+  assert.equal(dry.contract.capacityComparison.candidateParametersBillions, 1.7);
+  assert.equal(dry.contract.capacityComparison.candidateToBaselineParameterRatio,
+    1.7 / 0.6);
+  assert.deepEqual(dry.contract.capacityComparison.frozen, [
+    "prompt text",
+    "token ids",
+    "expanded input ids",
+    "active-only control input ids",
+    "fixture",
+    "labels",
+    "transition bottleneck",
+    "threshold policy",
+    "validation lock",
+  ]);
+  assert.deepEqual(dry.contract.capacityComparison.changed,
+    ["model weights", "model capacity", "NF4 quantization"]);
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+  assert.equal(dry.contract.baselineArtifact,
+    "lab/attention-shadow/qwen3-0.6b-fp16-answerability-transition-v1.json");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.transition.thresholdIsStrictlyPositive, true);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert.match(dry.contract.boundary,
+    /no prompt rewrite, score rewrite, threshold rewrite.*no.*provider request/);
+  assert.deepEqual(dry.selfTest, {
+    model: "Qwen/Qwen3-1.7B",
+    modelOnlyChange: true,
+    mechanismScorerId: "qwen3-per-fold-answerability-transition-v1",
+    policyId: "positive-zero-false-answerability-transition-event-v1",
+    transitionMargin: 1,
+    zeroThresholdRefused: true,
+    quantization: {
+      method: "bitsandbytes-nf4",
+      loadIn4Bit: true,
+      doubleQuant: true,
+      computeDtype: "torch.float16",
+      quantStorage: "torch.uint8",
+    },
+    deviceMapFallback: {"": "cuda:0"},
+  });
+
+  const fixture = JSON.parse(readFileSync(capacityFixture, "utf8"));
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    const folds = fixture.splits[splitName].folds;
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+  }
+
+  const source = readFileSync(capacityScript, "utf8");
+  assert(source.includes("import probe_attention_answerability_transition as transition") &&
+    source.includes("transition.prepare_split(") &&
+    source.includes("transition.run_prepared_split(") &&
+    source.includes("transition.calibrate_threshold(") &&
+    !source.includes("def build_prompt_text("),
+  "the capacity falsifier no longer reuses the frozen Gate 84 mechanism");
+  assert(source.includes('baseline.get("source", {}).get("scriptSha256")') &&
+    source.includes("attention-capacity-frozen-mechanism-source-drift") &&
+    source.includes('prompt["promptSha256"] != old["promptSha256"]') &&
+    source.includes('prompt["expandedInputSha256"] != old["expandedInputSha256"]') &&
+    source.includes('prompt["activeOnlyInputSha256"] != old["activeOnlyInputSha256"]') &&
+    source.includes("attention-capacity-model-swap-changed-frozen-inputs"),
+  "the model swap no longer proves byte and token identity with the sealed baseline");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8"),
+  "the capacity model no longer uses the frozen NF4 loading contract");
+  assert(source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-capacity-model-is-frozen") &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the capacity model or fail-closed validation policy is no longer frozen");
+  assert.equal(source.match(/transition\.run_prepared_split\(/g)?.length, 2);
+  assert(source.includes('split_name="development"') &&
+    source.includes('split_name="validation"') &&
+    source.match(/torch=torch,/g)?.length === 2 &&
+    source.match(/model=model,/g)?.length === 2 &&
+    source.match(/device=args\.device,/g)?.length === 2 &&
+    source.match(/token_ids=token_ids,/g)?.length === 2,
+  "the capacity falsifier no longer calls the frozen scorer with its exact interface");
+  assert(source.includes('reported = getattr(model, "hf_device_map", None)') &&
+    source.includes('return {"": str(parameter.device)}') &&
+    source.includes('"deviceMap": model_device_map(model)') &&
+    source.indexOf('"deviceMap": model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the expensive capacity sweep can again fail after inference on missing device metadata");
+  assert(!source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the capacity experiment gained generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the capacity experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.aLargerQuantizedModelCannotChangeTheFrozenMechanism = true;
+}
+
+// GATE 86 - direct source attribution distinguishes candidate, active, and neither.
+//
+// One constrained-choice forward per complete root or nested fold asks the distinction that
+// the larger answerability model still blurred. The candidate margin over the stronger active
+// or neither alternative jointly selects a fold and decides whether interruption is warranted.
+// Development precision remains primary and validation stays sealed until it qualifies.
+// ---------------------------------------------------------------------------
+{
+  const sourceScript = join(
+    PROJECT, "scripts", "probe_attention_source_attribution.py");
+  const sourceFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const sourceDryRun = spawnSync("python3", [sourceScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(sourceDryRun.status, 0, sourceDryRun.stderr);
+  const dry = JSON.parse(sourceDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-per-fold-source-attribution-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-source-attribution-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold candidate logit minus the larger of active and neither logits");
+  assert.equal(dry.contract.model, "Qwen/Qwen3-1.7B");
+  assert.deepEqual(dry.contract.choiceTokens,
+    [" candidate", " active", " neither"]);
+  assert.equal(dry.contract.judgment.candidate,
+    "active context alone is insufficient and this fold supplies every missing fact needed to answer correctly and completely");
+  assert.equal(dry.contract.judgment.active,
+    "active context alone already contains enough stated evidence to answer or perform the task, so this fold is unnecessary");
+  assert.equal(dry.contract.judgment.neither,
+    "active context alone is insufficient and this fold also does not supply all missing evidence");
+  assert.equal(dry.contract.score,
+    "candidate logit minus max(active logit, neither logit) for each complete fold");
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.forwardsPerDecision,
+    "one independent local-model forward per supplied fold; the count varies with the complete standing fold set");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert(dry.contract.boundary.includes("no attention-tensor claim") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("cap, truncation"));
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+  }
+
+  assert.deepEqual(dry.selfTest, {
+    candidateMargin: 3,
+    candidateChoice: "candidate",
+    activeMargin: -3,
+    activeChoice: "active",
+    neitherMargin: -3,
+    neitherChoice: "neither",
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    zeroThresholdRefused: true,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(sourceFixture, "utf8"));
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(sourceScript, "utf8");
+  const promptStart = source.indexOf("def build_prompt_text(");
+  const promptEnd = source.indexOf("\ndef prepare_fold_prompt(", promptStart);
+  assert(promptStart >= 0 && promptEnd > promptStart);
+  const promptSource = source.slice(promptStart, promptEnd);
+  assert(promptSource.includes("Choose candidate only when") &&
+    promptSource.includes("Choose active when") &&
+    promptSource.includes("Choose neither when") &&
+    promptSource.includes("Topical relation, partial evidence") &&
+    promptSource.includes('enable_thinking=False') &&
+    promptSource.includes('return rendered + "Source:"'),
+  "the source judge no longer asks the direct three-way distinction");
+  assert(!promptSource.includes('case["class"]') &&
+    !promptSource.includes('case["themeFoldId"]') &&
+    !promptSource.includes('case["relevantFoldIds"]') &&
+    !promptSource.includes("expected_source("),
+  "development labels leaked into the source-attribution prompt");
+  assert(source.includes('logits[token_ids["candidate"]]') &&
+    source.includes('logits[token_ids["active"]]') &&
+    source.includes('logits[token_ids["neither"]]') &&
+    source.includes("alternative = max(active_logit, neither_logit)") &&
+    source.includes('"candidateSourceMargin": candidate_logit - alternative'),
+  "source attribution no longer comes from the three constrained logits");
+  assert(source.includes('key=lambda row: (-row["candidateSourceMargin"], row["id"])') &&
+    source.includes('"confidence": winner["candidateSourceMargin"]'),
+  "fold selection and interruption no longer share one candidate-source margin");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes('len(prompts) == len(fold_ids)') &&
+    source.includes("attention-source-did-not-measure-every-fold"),
+  "source attribution no longer measures every hierarchical fold");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-source-input-exceeds-model-context"),
+  "source attribution silently truncates an input that does not fit");
+  assert(source.includes('point["threshold"] > MINIMUM_ATTRIBUTION_THRESHOLD') &&
+    source.includes('point["offers"] >= MIN_DEVELOPMENT_OFFERS') &&
+    source.includes('point["precision"] == DEVELOPMENT_REQUIRED_PRECISION') &&
+    source.includes('"status": "not-run-no-development-threshold"') &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the source-attribution precision gate or fail-closed validation weakened");
+  assert(source.indexOf("values, forward_seconds = score_once(") <
+    source.indexOf('"expectedSource": expected_source('),
+  "source labels are joined before scoring instead of after it");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-source-model-is-frozen") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the source-attribution model or pre-inference metadata contract drifted");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "source attribution gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "source attribution gained a carrier, shipped runtime path, or provider call");
+
+  checks.sourceAttributionMustNameCandidateActiveOrNeither = true;
+}
+
+// GATE 87 - missing evidence must be true before a fold can interrupt.
+//
+// One binary proposition replaces the rejected three-label source judgment. Each complete
+// root or nested fold is scored independently: true only when active context is insufficient
+// and that exact fold supplies every missing stated fact. A strictly positive truth margin
+// selects the fold and gates interruption. Development still requires four zero-false offers,
+// and held-out validation remains sealed until that threshold exists.
+// ---------------------------------------------------------------------------
+{
+  const missingScript = join(
+    PROJECT, "scripts", "probe_attention_missing_evidence.py");
+  const missingFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const missingDryRun = spawnSync("python3", [missingScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(missingDryRun.status, 0, missingDryRun.stderr);
+  const dry = JSON.parse(missingDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-per-fold-missing-evidence-proposition-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-missing-evidence-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold true logit minus false logit");
+  assert.equal(dry.contract.model, "Qwen/Qwen3-1.7B");
+  assert.deepEqual(dry.contract.choiceTokens, [" true", " false"]);
+  assert.equal(dry.contract.proposition,
+    "this exact fold supplies every piece of stated evidence missing from active context that is needed to answer the current task correctly and completely");
+  assert.deepEqual(dry.contract.falseWhen, [
+    "active context already suffices",
+    "the fold is merely related or partial",
+    "the fold does not answer the task",
+    "the task can be performed from the active instruction alone",
+  ]);
+  assert.equal(dry.contract.score,
+    "true logit minus false logit for each complete fold");
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.forwardsPerDecision,
+    "one independent local-model forward per supplied fold; the count varies with the complete standing fold set");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert(dry.contract.boundary.includes("no attention-tensor claim") &&
+    dry.contract.boundary.includes("three-way source score") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("cap, truncation"));
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+  }
+
+  assert.deepEqual(dry.selfTest, {
+    trueMargin: 3,
+    trueChoice: "true",
+    falseMargin: -3,
+    falseChoice: "false",
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    zeroThresholdRefused: true,
+    wrongFoldOnPositiveIsFalse: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(missingFixture, "utf8"));
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(missingScript, "utf8");
+  const promptStart = source.indexOf("def build_prompt_text(");
+  const promptEnd = source.indexOf("\ndef prepare_fold_prompt(", promptStart);
+  assert(promptStart >= 0 && promptEnd > promptStart);
+  const promptSource = source.slice(promptStart, promptEnd);
+  assert(promptSource.includes("It is true only when active context alone is insufficient") &&
+    promptSource.includes("supplies every missing stated fact") &&
+    promptSource.includes("It is false when active context already suffices") &&
+    promptSource.includes("merely related or partial") &&
+    promptSource.includes("This exact candidate fold supplies every piece of stated evidence missing from active") &&
+    promptSource.includes('enable_thinking=False') &&
+    promptSource.includes('return rendered + "Verdict:"'),
+  "the binary scorer no longer asks the frozen missing-evidence proposition");
+  assert(!promptSource.includes('case["class"]') &&
+    !promptSource.includes('case["themeFoldId"]') &&
+    !promptSource.includes('case["relevantFoldIds"]') &&
+    !promptSource.includes("expected_truth("),
+  "development labels leaked into the missing-evidence prompt");
+  assert(source.includes('logits[token_ids["true"]]') &&
+    source.includes('logits[token_ids["false"]]') &&
+    source.includes("margin = true_logit - false_logit") &&
+    source.includes('"truthMargin": margin'),
+  "the missing-evidence score no longer comes from the two constrained logits");
+  assert(source.includes('key=lambda row: (-row["truthMargin"], row["id"])') &&
+    source.includes('"confidence": winner["truthMargin"]'),
+  "fold selection and interruption no longer share one truth margin");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes('len(prompts) == len(fold_ids)') &&
+    source.includes("attention-missing-did-not-measure-every-fold"),
+  "the missing-evidence scorer no longer measures every hierarchical fold");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-missing-input-exceeds-model-context"),
+  "the missing-evidence scorer silently truncates an input that does not fit");
+  assert(source.includes('point["threshold"] > MINIMUM_PROPOSITION_THRESHOLD') &&
+    source.includes('point["offers"] >= MIN_DEVELOPMENT_OFFERS') &&
+    source.includes('point["precision"] == DEVELOPMENT_REQUIRED_PRECISION') &&
+    source.includes('"status": "not-run-no-development-threshold"') &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the missing-evidence precision gate or fail-closed validation weakened");
+  assert(source.indexOf("values, forward_seconds = score_once(") <
+    source.indexOf('"expectedTruth": expected_truth('),
+  "expected truth is joined before scoring instead of after it");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-missing-model-is-frozen") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the missing-evidence model or pre-inference metadata contract drifted");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the missing-evidence experiment gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the missing-evidence experiment gained a carrier, shipped runtime path, or provider call");
+
+  checks.missingEvidenceMustBeTrueBeforeAFoldCanInterrupt = true;
+}
+
+// GATE 88 - reversed neutral verbalizers must agree before interruption.
+//
+// The missing-evidence proposition and Qwen3-1.7B model remain fixed. Two neutral one-token
+// labels reverse their truth mapping in independent forwards for every complete fold. The
+// minimum semantic truth margin rejects a fixed label preference because both mappings must
+// choose truth. Development and held-out validation retain the Gate 87 precision boundary.
+// ---------------------------------------------------------------------------
+{
+  const verbalizerScript = join(
+    PROJECT, "scripts", "probe_attention_verbalizer_symmetry.py");
+  const verbalizerFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const verbalizerDryRun = spawnSync("python3", [verbalizerScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(verbalizerDryRun.status, 0, verbalizerDryRun.stderr);
+  const dry = JSON.parse(verbalizerDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "qwen3-per-fold-counterbalanced-verbalizer-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-counterbalanced-verbalizer-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold minimum semantic truth margin across reversed A/B mappings");
+  assert.equal(dry.contract.model, "Qwen/Qwen3-1.7B");
+  assert.deepEqual(dry.contract.choiceTokens, [" A", " B"]);
+  assert.deepEqual(dry.contract.choiceTokenIds, {A: 362, B: 425});
+  assert.deepEqual(dry.contract.mappingPrompts, [
+    {id: "a-means-true", trueLabel: "A", falseLabel: "B"},
+    {id: "b-means-true", trueLabel: "B", falseLabel: "A"},
+  ]);
+  assert.equal(dry.contract.proposition,
+    "this exact fold supplies every piece of stated evidence missing from active context that is needed to answer the current task correctly and completely");
+  assert.equal(dry.contract.score,
+    "minimum of the semantic true-minus-false margin under A-means-true and B-means-true mappings");
+  assert.equal(dry.contract.forwardsPerDecision,
+    "two independent reversed-mapping forwards per supplied fold; the count is twice the complete standing fold set");
+  assert.deepEqual(dry.contract.predecessor, {
+    scorerId: "qwen3-per-fold-missing-evidence-proposition-v1",
+    policyId: "positive-zero-false-missing-evidence-event-v1",
+    evidenceSha256:
+      "4d35c767eb309188d527b44e8f99f46f182aa0c736da59f62f9c104663ddbfc4",
+    semanticPropositionUnchanged: true,
+    onlyMechanismChange:
+      "replace true/false response tokens with two neutral labels and reverse their truth mapping",
+  });
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert(dry.contract.boundary.includes("no semantic proposition rewrite") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("cap, truncation"));
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+  }
+
+  assert.deepEqual(dry.selfTest, {
+    consistentTrueMargin: 3,
+    consistentTrueLabels: ["A", "B"],
+    fixedLabelPriorMargin: -3,
+    fixedLabelPriorLabels: ["A", "A"],
+    consistentFalseMargin: -3,
+    rankedFoldIds: ["a-fold", "z-fold", "low-fold"],
+    threshold: 0.6,
+    offers: 4,
+    falseOffers: 0,
+    zeroThresholdRefused: true,
+  });
+
+  const fixture = JSON.parse(readFileSync(verbalizerFixture, "utf8"));
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(verbalizerScript, "utf8");
+  const promptStart = source.indexOf("def build_prompt_text(");
+  const promptEnd = source.indexOf("\ndef prepare_mapping_prompt(", promptStart);
+  assert(promptStart >= 0 && promptEnd > promptStart);
+  const promptSource = source.slice(promptStart, promptEnd);
+  assert(promptSource.includes("It is true only when active context alone is insufficient") &&
+    promptSource.includes("supplies every missing stated fact") &&
+    promptSource.includes("It is false when active context already suffices") &&
+    promptSource.includes("merely related or partial") &&
+    promptSource.includes("This exact candidate fold supplies every piece of stated evidence missing from active") &&
+    promptSource.includes("The response labels are arbitrary") &&
+    promptSource.includes("means the proposition is true") &&
+    promptSource.includes("means it is") &&
+    promptSource.includes('enable_thinking=False') &&
+    promptSource.includes('return rendered + "Label:"'),
+  "the verbalizer control changed the proposition or lost its reversed label mapping");
+  assert(!promptSource.includes('case["class"]') &&
+    !promptSource.includes('case["themeFoldId"]') &&
+    !promptSource.includes('case["relevantFoldIds"]') &&
+    !promptSource.includes("expected_truth("),
+  "development labels leaked into the verbalizer prompt");
+  assert(source.includes('result == EXPECTED_LABEL_TOKEN_IDS') &&
+    source.includes("attention-verbalizer-label-token-drift") &&
+    source.includes('if true_label == "A"') &&
+    source.includes("return label_a_logit - label_b_logit") &&
+    source.includes("return label_b_logit - label_a_logit") &&
+    source.includes('"counterbalancedTruthMargin": min(margins)'),
+  "the verbalizer score no longer reverses truth coding and takes the consistency bottleneck");
+  assert(source.includes("for mapping_prompt in prompt[\"mappings\"]:") &&
+    source.includes("score_mapping_once(") &&
+    source.includes('totals["forwardPasses"] += len(MAPPINGS)'),
+  "each fold no longer receives both reversed-mapping forwards");
+  assert(source.includes('key=lambda row: (-row["counterbalancedTruthMargin"], row["id"])') &&
+    source.includes('"confidence": winner["counterbalancedTruthMargin"]'),
+  "fold selection and interruption no longer share one counterbalanced margin");
+  assert(source.includes("for fold_id in order:") &&
+    source.includes('len(prompts) == len(fold_ids)') &&
+    source.includes("attention-verbalizer-did-not-measure-every-fold"),
+  "the verbalizer control no longer measures every hierarchical fold");
+  assert(source.includes("truncation=False") &&
+    source.includes("attention-verbalizer-input-exceeds-model-context") &&
+    source.includes("attention-verbalizer-reversal-changed-token-count"),
+  "a verbalizer input can be truncated or change token count across mappings");
+  assert(source.includes('point["threshold"] > MINIMUM_SYMMETRY_THRESHOLD') &&
+    source.includes('point["offers"] >= MIN_DEVELOPMENT_OFFERS') &&
+    source.includes('point["precision"] == DEVELOPMENT_REQUIRED_PRECISION') &&
+    source.includes('"status": "not-run-no-development-threshold"') &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the counterbalanced precision gate or fail-closed validation weakened");
+  assert(source.includes('elif args.development_only:') &&
+    source.includes('"status": "pending-frozen-development-threshold"') &&
+    source.includes('"threshold": selected["threshold"]') &&
+    source.includes('parser.add_argument(\n        "--development-only"'),
+  "the bounded development checkpoint can no longer preserve a qualifying threshold");
+  assert(source.indexOf("values, forward_seconds = score_pair(") <
+    source.indexOf('"expectedTruth": expected_truth('),
+  "expected truth is joined before counterbalanced scoring instead of after it");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-verbalizer-model-is-frozen") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the verbalizer model or pre-inference metadata contract drifted");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the verbalizer control gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the verbalizer control gained a carrier, shipped runtime path, or provider call");
+
+  checks.reversedNeutralVerbalizersMustAgreeBeforeInterruption = true;
+}
+
+// GATE 89 - a different model family cannot rewrite the frozen verbalizer scorer.
+//
+// Granite 3.3 replaces Qwen3 weights, architecture, tokenizer, and native chat template.
+// The semantic prompt builder, missing-evidence proposition, reversed A/B mapping, minimum
+// truth bottleneck, complete fold hierarchy, precision policy, and validation lock remain
+// owned by Gate 88. Development labels still join only after every independent pair scores.
+// ---------------------------------------------------------------------------
+{
+  const familyScript = join(
+    PROJECT, "scripts", "probe_attention_verbalizer_family.py");
+  const familyFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const familyDryRun = spawnSync("python3", [familyScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(familyDryRun.status, 0, familyDryRun.stderr);
+  const dry = JSON.parse(familyDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "granite3.3-per-fold-counterbalanced-verbalizer-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-counterbalanced-verbalizer-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold minimum semantic truth margin across reversed A/B mappings");
+  assert.equal(dry.contract.model,
+    "ibm-granite/granite-3.3-2b-instruct");
+  assert.equal(dry.contract.modelFamilyOnlyChange, true);
+  assert.deepEqual(dry.contract.choiceTokens, [" A", " B"]);
+  assert.deepEqual(dry.contract.choiceTokenIds, {A: 399, B: 551});
+  assert.deepEqual(dry.contract.mappingPrompts, [
+    {id: "a-means-true", trueLabel: "A", falseLabel: "B"},
+    {id: "b-means-true", trueLabel: "B", falseLabel: "A"},
+  ]);
+  assert.equal(dry.contract.proposition,
+    "this exact fold supplies every piece of stated evidence missing from active context that is needed to answer the current task correctly and completely");
+  assert.equal(dry.contract.score,
+    "minimum of the semantic true-minus-false margin under A-means-true and B-means-true mappings");
+  assert.deepEqual(dry.contract.predecessor, {
+    scorerId: "qwen3-per-fold-counterbalanced-verbalizer-v1",
+    policyId: "positive-zero-false-counterbalanced-verbalizer-event-v1",
+    model: "Qwen/Qwen3-1.7B",
+    evidenceSha256:
+      "9baffc932baf911dba453c4dd0cc79d1c9060ca958149eeafd111cdd7442fa6c",
+  });
+  assert.deepEqual(dry.contract.familyComparison.frozen, [
+    "semantic prompt builder",
+    "missing-evidence proposition",
+    "A/B mapping reversal",
+    "minimum semantic truth bottleneck",
+    "fixture",
+    "labels",
+    "complete hierarchy",
+    "threshold policy",
+    "validation lock",
+    "NF4 quantization",
+  ]);
+  assert.deepEqual(dry.contract.familyComparison.changed, [
+    "model weights",
+    "model family",
+    "model architecture",
+    "tokenizer",
+    "native chat template",
+    "label token ids",
+  ]);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert(dry.contract.boundary.includes("no semantic prompt rewrite") &&
+    dry.contract.boundary.includes("score rewrite") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("cap, truncation"));
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+  }
+
+  assert.deepEqual(dry.selfTest, {
+    model: "ibm-granite/granite-3.3-2b-instruct",
+    revision: "707f574c62054322f6b5b04b6d075f0a8f05e0f0",
+    modelFamilyOnlyChange: true,
+    mechanismScorerId: "qwen3-per-fold-counterbalanced-verbalizer-v1",
+    policyId: "positive-zero-false-counterbalanced-verbalizer-event-v1",
+    labelTokenIds: {A: 399, B: 551},
+    fixedLabelPriorMargin: -3,
+    zeroThresholdRefused: true,
+    quantization: {
+      method: "bitsandbytes-nf4",
+      loadIn4Bit: true,
+      doubleQuant: true,
+      computeDtype: "torch.float16",
+      quantStorage: "torch.uint8",
+    },
+  });
+
+  const fixture = JSON.parse(readFileSync(familyFixture, "utf8"));
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(familyScript, "utf8");
+  assert(source.includes("import probe_attention_verbalizer_symmetry as verbalizer") &&
+    source.includes("verbalizer.prepare_split(") &&
+    source.includes("verbalizer.run_prepared_split(") &&
+    source.includes("verbalizer.decision_row(") &&
+    source.includes("verbalizer.calibrate_threshold(") &&
+    !source.includes("def build_prompt_text(") &&
+    !source.includes("def pair_values("),
+  "the Granite family test no longer reuses the frozen Gate 88 mechanism");
+  assert(source.includes('baseline.get("source", {}).get("scriptSha256")') &&
+    source.includes("attention-family-frozen-mechanism-source-drift") &&
+    source.includes('baseline.get("evidenceSha256")') &&
+    source.includes("attention-family-baseline-evidence-drift"),
+  "the model-family test no longer binds the sealed predecessor and mechanism source");
+  assert(source.includes('getattr(config, "_commit_hash", None) == EXPECTED_REVISION') &&
+    source.includes("attention-family-model-revision-drift") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-family-model-is-frozen"),
+  "the Granite model id or exact downloaded revision can drift");
+  assert(source.includes("result == EXPECTED_LABEL_TOKEN_IDS") &&
+    source.includes("attention-family-label-token-drift") &&
+    source.includes('mapping_prompts == 640') &&
+    source.includes('len(rows) == 320') &&
+    source.includes("attention-family-mapping-pair-drift"),
+  "the Granite tokenizer or complete reversed-mapping input contract can drift");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the Granite quantization or pre-inference metadata contract drifted");
+  assert(source.includes('if selected is None:') &&
+    source.includes('elif args.development_only:') &&
+    source.includes("verbalizer.pending_validation(fixture, selected)") &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the Granite development checkpoint or fail-closed validation weakened");
+  assert(source.indexOf("development_trials, development_times =") <
+    source.indexOf("development_decisions ="),
+  "development labels can enter before the Granite scorer completes");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the Granite family test gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the Granite family test gained a carrier, shipped runtime path, or provider call");
+
+  checks.aDifferentModelFamilyCannotRewriteTheFrozenVerbalizerScorer = true;
+}
+
+// GATE 90 - Granite cannot rewrite the frozen candidate-active-neither scorer.
+//
+// The model family changes while Gate 86 continues to own the semantic prompt, three source
+// labels, candidate margin, complete hierarchy, precision policy, and validation lock. This
+// directly tests the active-context redundancy that remained after Gate 89's family swap.
+// ---------------------------------------------------------------------------
+{
+  const familyScript = join(
+    PROJECT, "scripts", "probe_attention_source_family.py");
+  const familyFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const familyDryRun = spawnSync("python3", [familyScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(familyDryRun.status, 0, familyDryRun.stderr);
+  const dry = JSON.parse(familyDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "granite3.3-per-fold-source-attribution-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-source-attribution-event-v1");
+  assert.equal(dry.contract.confidenceScalar,
+    "maximum per-fold candidate logit minus the larger of active and neither logits");
+  assert.equal(dry.contract.model,
+    "ibm-granite/granite-3.3-2b-instruct");
+  assert.equal(dry.contract.modelFamilyOnlyChange, true);
+  assert.deepEqual(dry.contract.choiceTokens,
+    [" candidate", " active", " neither"]);
+  assert.deepEqual(dry.contract.choiceTokenIds, {
+    candidate: 15133,
+    active: 4523,
+    neither: 25209,
+  });
+  assert.equal(dry.contract.judgment.candidate,
+    "active context alone is insufficient and this fold supplies every missing fact needed to answer correctly and completely");
+  assert.equal(dry.contract.judgment.active,
+    "active context alone already contains enough stated evidence to answer or perform the task, so this fold is unnecessary");
+  assert.equal(dry.contract.judgment.neither,
+    "active context alone is insufficient and this fold also does not supply all missing evidence");
+  assert.equal(dry.contract.score,
+    "candidate logit minus max(active logit, neither logit) for each complete fold");
+  assert.deepEqual(dry.contract.predecessor, {
+    scorerId: "qwen3-per-fold-source-attribution-v1",
+    policyId: "positive-zero-false-source-attribution-event-v1",
+    model: "Qwen/Qwen3-1.7B",
+    evidenceSha256:
+      "1b5cdb140a9a96cc1d7dca38b9ad7dc637aee98552f80f01f7a7ff8fc1bc81d9",
+  });
+  assert.deepEqual(dry.contract.familyComparison.frozen, [
+    "semantic prompt builder",
+    "candidate-active-neither judgment",
+    "candidate margin over the stronger alternative",
+    "fixture",
+    "labels",
+    "complete hierarchy",
+    "threshold policy",
+    "validation lock",
+    "NF4 quantization",
+  ]);
+  assert.deepEqual(dry.contract.familyComparison.changed, [
+    "model weights",
+    "model family",
+    "model architecture",
+    "tokenizer",
+    "native chat template",
+    "choice token ids",
+  ]);
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.equal(dry.contract.calibration.requiredObservedPrecision, 1);
+  assert.equal(dry.contract.calibration.minimumOffers, 4);
+  assert.equal(dry.contract.calibration.minimumThreshold, 0);
+  assert.equal(dry.contract.calibration.thresholdIsStrictlyPositive, true);
+  assert.match(dry.contract.validation,
+    /not run unless development selects a threshold.*threshold frozen/);
+  assert(dry.contract.boundary.includes("no source-label rewrite") &&
+    dry.contract.boundary.includes("semantic prompt rewrite") &&
+    dry.contract.boundary.includes("score rewrite") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("cap, truncation"));
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+
+  for (const splitName of ["development", "validation"]) {
+    const split = dry.contract.splits[splitName];
+    assert.equal(split.folds, 8);
+    assert.equal(split.roots, 3);
+    assert.equal(split.nested, 5);
+    assert.equal(split.maximumDepth, 2);
+    assert.equal(split.eventSnapshots, 40);
+    assert.equal(split.foldRowsPerSnapshot, 8);
+    assert.equal(split.positiveRate, 0.2);
+    assert.deepEqual(split.classes, {
+      positive: 8,
+      "no-relevant": 8,
+      "already-visible": 8,
+      "semantically-related-but-non-answering": 8,
+      "interruption-not-worthwhile": 8,
+    });
+    assert.deepEqual(split.eventKinds, {
+      "user-message": 10,
+      "tool-result": 10,
+      "assistant-message": 10,
+      stop: 10,
+    });
+  }
+
+  assert.deepEqual(dry.selfTest, {
+    model: "ibm-granite/granite-3.3-2b-instruct",
+    revision: "707f574c62054322f6b5b04b6d075f0a8f05e0f0",
+    modelFamilyOnlyChange: true,
+    mechanismScorerId: "qwen3-per-fold-source-attribution-v1",
+    policyId: "positive-zero-false-source-attribution-event-v1",
+    choiceTokenIds: {candidate: 15133, active: 4523, neither: 25209},
+    candidateMargin: 3,
+    activeMargin: -3,
+    neitherMargin: -3,
+    zeroThresholdRefused: true,
+    quantization: {
+      method: "bitsandbytes-nf4",
+      loadIn4Bit: true,
+      doubleQuant: true,
+      computeDtype: "torch.float16",
+      quantStorage: "torch.uint8",
+    },
+  });
+
+  const fixture = JSON.parse(readFileSync(familyFixture, "utf8"));
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(familyScript, "utf8");
+  assert(source.includes("import probe_attention_source_attribution as source_attribution") &&
+    source.includes("source_attribution.prepare_split(") &&
+    source.includes("source_attribution.run_prepared_split(") &&
+    source.includes("source_attribution.decision_row(") &&
+    source.includes("source_attribution.calibrate_threshold(") &&
+    !source.includes("def build_prompt_text(") &&
+    !source.includes("def source_values("),
+  "the Granite source test no longer reuses the frozen Gate 86 mechanism");
+  assert(source.includes('baseline.get("source", {}).get("scriptSha256")') &&
+    source.includes("attention-source-family-frozen-mechanism-source-drift") &&
+    source.includes('baseline.get("evidenceSha256")') &&
+    source.includes("attention-source-family-baseline-evidence-drift"),
+  "the Granite source test no longer binds the sealed predecessor and source mechanism");
+  assert(source.includes('getattr(config, "_commit_hash", None) == EXPECTED_REVISION') &&
+    source.includes("attention-source-family-model-revision-drift") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-source-family-model-is-frozen"),
+  "the Granite source model id or exact revision can drift");
+  assert(source.includes("result == EXPECTED_CHOICE_TOKEN_IDS") &&
+    source.includes("attention-source-family-choice-token-drift") &&
+    source.includes('len(rows) == 320') &&
+    source.includes("attention-source-family-development-row-count-drift"),
+  "the Granite source tokenizer or complete input contract can drift");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("development_trials, development_times ="),
+  "the Granite source quantization or pre-inference metadata contract drifted");
+  assert(source.includes('if selected is None:') &&
+    source.includes('elif args.development_only:') &&
+    source.includes("pending_validation(fixture, selected)") &&
+    source.includes('validation["status"] = "evaluated-with-frozen-threshold"') &&
+    source.includes('validation["falseOffers"] == 0'),
+  "the Granite source checkpoint or fail-closed validation weakened");
+  assert(source.indexOf("development_trials, development_times =") <
+    source.indexOf("development_decisions ="),
+  "development labels can enter before Granite source scoring completes");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "the Granite source test gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "the Granite source test gained a carrier, shipped runtime path, or provider call");
+
+  checks.graniteCannotRewriteCandidateActiveOrNeither = true;
+}
+
+// GATE 91 - The held-out Granite source validation cannot reopen development.
+//
+// Gate 90 selected one threshold from development. This runner may score only the untouched
+// validation split, once, at that exact threshold. Confirmation still requires four offers
+// with no false interruption; no recall or latency diagnostic can rescue a failure.
+// ---------------------------------------------------------------------------
+{
+  const validationScript = join(
+    PROJECT, "scripts", "probe_attention_source_family_validation.py");
+  const validationFixture = join(
+    PROJECT, "scripts", "fixtures", "attention_utility_v1.json");
+  const validationDryRun = spawnSync("python3", [validationScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(validationDryRun.status, 0, validationDryRun.stderr);
+  const dry = JSON.parse(validationDryRun.stdout);
+  assert.equal(dry.live, false);
+  assert.equal(dry.modelLoads, 0);
+  assert.equal(dry.networkRequests, 0);
+  assert.equal(dry.contract.protocolVersion, 1);
+  assert.equal(dry.contract.scorerId,
+    "granite3.3-per-fold-source-attribution-heldout-v1");
+  assert.equal(dry.contract.policyId,
+    "positive-zero-false-source-attribution-event-v1");
+  assert.equal(dry.contract.phase, "held-out validation only");
+  assert.equal(dry.contract.frozenThreshold, 8.625);
+  assert.equal(dry.contract.developmentArtifact,
+    "lab/attention-shadow/granite3.3-2b-nf4-source-attribution-v1.json");
+  assert.equal(dry.contract.developmentEvidenceSha256,
+    "546a68c2fc2e7fef6d72b3e8996cc0e64721b82082794e5fd7488561c8381dd7");
+  assert.deepEqual(dry.contract.developmentCalibration, {
+    threshold: 8.625,
+    offers: 5,
+    correctOffers: 5,
+    falseOffers: 0,
+    precision: 1,
+    recall: 0.625,
+  });
+  assert.equal(dry.contract.validation,
+    "score the untouched validation split once at threshold 8.625; do not recalibrate, rescore development, or change the threshold");
+  assert.equal(dry.contract.primaryOutcome,
+    "at least four held-out offers with zero false offers at the frozen development threshold");
+  assert.equal(dry.contract.candidateUniverse, "standing folded nodes only");
+  assert.equal(dry.contract.candidateSelection,
+    "all supplied fold nodes in every decision");
+  assert.equal(dry.contract.inputTruncation, false);
+  assert.equal(dry.contract.prefilter, null);
+  assert.equal(dry.contract.generationCalls, 0);
+  assert.equal(dry.contract.providerCalls, 0);
+  assert.equal(dry.contract.labelsVisibleToScorer, false);
+  assert.deepEqual(dry.contract.choiceTokenIds, {
+    candidate: 15133,
+    active: 4523,
+    neither: 25209,
+  });
+  assert.deepEqual(dry.contract.quantization, {
+    method: "bitsandbytes-nf4",
+    loadIn4Bit: true,
+    doubleQuant: true,
+    computeDtype: "torch.float16",
+    quantStorage: "torch.uint8",
+  });
+  assert(dry.contract.boundary.includes("no development rescore") &&
+    dry.contract.boundary.includes("recalibration") &&
+    dry.contract.boundary.includes("provider request") &&
+    dry.contract.boundary.includes("prefilter, cap") &&
+    dry.contract.boundary.includes("truncation"));
+
+  const split = dry.contract.splits.validation;
+  assert.equal(split.folds, 8);
+  assert.equal(split.roots, 3);
+  assert.equal(split.nested, 5);
+  assert.equal(split.maximumDepth, 2);
+  assert.equal(split.eventSnapshots, 40);
+  assert.equal(split.foldRowsPerSnapshot, 8);
+  assert.equal(split.positiveRate, 0.2);
+  assert.deepEqual(split.rootFoldIds, ["K1", "K4", "K6"]);
+  assert.deepEqual(split.nestedFoldIds, ["K2", "K3", "K5", "K7", "K8"]);
+  assert.deepEqual(split.classes, {
+    positive: 8,
+    "no-relevant": 8,
+    "already-visible": 8,
+    "semantically-related-but-non-answering": 8,
+    "interruption-not-worthwhile": 8,
+  });
+  assert.deepEqual(split.eventKinds, {
+    "user-message": 10,
+    "tool-result": 10,
+    "assistant-message": 10,
+    stop: 10,
+  });
+
+  assert.deepEqual(dry.selfTest, {
+    model: "ibm-granite/granite-3.3-2b-instruct",
+    revision: "707f574c62054322f6b5b04b6d075f0a8f05e0f0",
+    developmentEvidenceSha256:
+      "546a68c2fc2e7fef6d72b3e8996cc0e64721b82082794e5fd7488561c8381dd7",
+    developmentPoint: {
+      threshold: 8.625,
+      offers: 5,
+      correctOffers: 5,
+      falseOffers: 0,
+      precision: 1,
+      recall: 0.625,
+    },
+    validationOnly: true,
+    minimumHeldOutOffers: 4,
+    passingConfirmed: true,
+    threeOffersRefused: true,
+    choiceTokenIds: {candidate: 15133, active: 4523, neither: 25209},
+    quantization: {
+      method: "bitsandbytes-nf4",
+      loadIn4Bit: true,
+      doubleQuant: true,
+      computeDtype: "torch.float16",
+      quantStorage: "torch.uint8",
+    },
+  });
+  assert.equal(dry.fixtureSha256,
+    "af0b3d2731839bac524bf4d510be414f9f30abd700128f70bbe9596a5d00a965");
+  const fixture = JSON.parse(readFileSync(validationFixture, "utf8"));
+  assert.deepEqual(Object.keys(fixture.splits).sort(), ["development", "validation"]);
+
+  const source = readFileSync(validationScript, "utf8");
+  assert(!source.includes("calibrate_threshold(") &&
+    !source.includes('fixture["splits"]["development"]') &&
+    !source.includes("development_trials") &&
+    source.includes('fixture["splits"]["validation"]'),
+  "held-out validation can recalibrate or score the development split");
+  assert(source.includes("attention.stable_sha256(stable) == claimed") &&
+    source.includes("attention-source-validation-development-evidence-drift") &&
+    source.includes('development.get("source", {}).get("scriptSha256")') &&
+    source.includes("attention-source-validation-development-source-drift"),
+  "held-out validation no longer authenticates the sealed development evidence and source");
+  assert(source.includes('selected.get("threshold") == EXPECTED_THRESHOLD') &&
+    source.includes('selected.get("offers") == 5') &&
+    source.includes('selected.get("correctOffers") == 5') &&
+    source.includes('selected.get("falseOffers") == 0') &&
+    source.includes('selected.get("precision") == 1.0') &&
+    source.includes('selected.get("recall") == 0.625') &&
+    source.includes("attention-source-validation-calibration-drift"),
+  "the exact development operating point can drift");
+  assert(source.includes('== "pending-frozen-development-threshold"') &&
+    source.includes('not development.get("splits", {}).get("validation", {}).get("trials")') &&
+    source.includes("attention-source-validation-development-opened-validation"),
+  "validation can be rerun after the development artifact already opened it");
+  assert(source.includes("source_attribution.prepare_split(") &&
+    source.includes("source_attribution.run_prepared_split(") &&
+    source.includes("source_attribution.decision_row(") &&
+    source.includes("selective.decision_metrics(validation_decisions, threshold)") &&
+    source.indexOf("validation_trials, validation_times =") <
+      source.indexOf("validation_decisions ="),
+  "held-out validation no longer uses the frozen scorer before reading labels");
+  assert(source.includes('threshold = selected["threshold"]') &&
+    source.includes("threshold == EXPECTED_THRESHOLD") &&
+    source.includes('validation["offers"] >= source_attribution.MIN_DEVELOPMENT_OFFERS') &&
+    source.includes('validation["falseOffers"] == 0') &&
+    source.includes('"thresholdWasRecalibrated": False') &&
+    source.includes('"developmentWasRescored": False'),
+  "the held-out threshold or zero-false confirmation rule weakened");
+  assert(source.includes('getattr(config, "_commit_hash", None) == EXPECTED_REVISION') &&
+    source.includes("attention-source-validation-model-revision-drift") &&
+    source.includes('args.model == DEFAULT_MODEL') &&
+    source.includes("attention-source-validation-model-is-frozen") &&
+    source.includes("source_family.choice_token_ids(tokenizer)"),
+  "the held-out model revision or choice ids can drift");
+  assert(source.includes("BitsAndBytesConfig(") &&
+    source.includes('bnb_4bit_quant_type="nf4"') &&
+    source.includes("bnb_4bit_use_double_quant=True") &&
+    source.includes("bnb_4bit_compute_dtype=torch.float16") &&
+    source.includes("bnb_4bit_quant_storage=torch.uint8") &&
+    source.includes('"deviceMap": capacity.model_device_map(model)') &&
+    source.indexOf('"deviceMap": capacity.model_device_map(model)') <
+      source.indexOf("validation_trials, validation_times ="),
+  "the held-out quantization or pre-inference metadata contract drifted");
+  assert(!source.includes("output_attentions=True") &&
+    !source.includes(".generate(") &&
+    !source.includes("max_new_tokens") &&
+    !/\bBM25\b/i.test(source) &&
+    !/folds\s*\[:\s*\d+/.test(source),
+  "held-out validation gained tensor claims, generation, lexical prefiltering, or a fold cap");
+  assert(!source.includes("registerTool") &&
+    !source.includes("context.suggestion") &&
+    !source.includes('from "../extensions') &&
+    !source.includes("api.openai.com"),
+  "held-out validation gained a carrier, shipped runtime path, or provider call");
+
+  checks.heldOutSourceValidationCannotRecalibrateDevelopment = true;
+}
+
+// GATE 92 - the BM25 falsifier ranks complete evidence and cannot be rescued by a threshold.
+//
+// The queued rank-only successor test scores every eligible fold's complete projection
+// document, refuses a corpus below the pre-registered twenty-needed-question floor by name,
+// and decides promote or kill from the pre-registered recall lines alone, evaluating kill
+// before promote so a scorer cannot promote while failing to beat newest-first. A needed
+// question with no relevant candidate is a document-construction failure and refuses by
+// name rather than scoring as a miss. A run whose sealed state the current runtime refuses
+// is excluded beside the result, never silently dropped: the sweep report carries the list.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(RETRIEVAL_RANK_PROTOCOL_VERSION, 1);
+  assert.equal(RETRIEVAL_RANK_SCORER_ID, "bm25-complete-evidence-rank-v1");
+  assert.equal(RETRIEVAL_RANK_MINIMUM_NEEDED_QUESTIONS, 20);
+  assert.equal(RETRIEVAL_RANK_PROMOTE_RECALL_AT_5, 0.80);
+  assert.equal(RETRIEVAL_RANK_PROMOTE_RECALL_AT_1, 0.50);
+  assert.equal(RETRIEVAL_RANK_KILL_RECALL_AT_5, 0.60);
+  assert.equal(RETRIEVAL_RANK_KILL_NEWEST_FIRST_MARGIN, 0.10);
+
+  // Complete evidence: the answering term sits past the historical 20,000-character
+  // cap, so the deleted slice would have blinded the scorer to it. The rank must see it.
+  const pastCap = `${"padding filler ".repeat(Math.ceil(RETRIEVAL_SHADOW_CONTENT_CHARS / 15))}navigator checksum ledger`;
+  assert(pastCap.indexOf("navigator") > RETRIEVAL_SHADOW_CONTENT_CHARS,
+    "the past-cap fixture does not reach past the historical cap");
+  // fold-noise shares one query term inside the historical cap, so a scorer
+  // that silently slices would rank it first and demote fold-deep in RANK,
+  // not just in score: the complete-evidence assertion cannot pass vacuously.
+  const candidates = [
+    { id: "fold-deep", document: pastCap },
+    { id: "fold-noise", document: "unrelated appendix narrative with one checksum mention" },
+    { id: "fold-zero", document: "quiet background" },
+  ];
+  const scored = scoreRetrievalRankCandidates({
+    query: "navigator checksum ledger", candidates });
+  assert.equal(scored.rows.find((row) => row.id === "fold-deep").rank, 1,
+    "a term past the historical cap did not reach the complete-evidence rank");
+  assert(scored.rows.find((row) => row.id === "fold-deep").score > 0);
+  assert.equal(scored.rows.find((row) => row.id === "fold-zero").score, 0,
+    "a zero-score candidate disappeared from the rank table");
+  assert.equal(scored.rows.length, candidates.length);
+  const reordered = scoreRetrievalRankCandidates({
+    query: "navigator checksum ledger", candidates: [...candidates].reverse() });
+  assert.deepEqual(reordered, scored, "candidate input order changed the rank result");
+  const labeled = scoreRetrievalRankCandidates({
+    query: "navigator checksum ledger",
+    candidates: candidates.map((candidate, index) => ({
+      ...candidate, relevant: index === 1, expectedAnswer: "leak", answerVerdict: "wrong",
+    })) });
+  assert.deepEqual(labeled, scored, "answer or relevance metadata reached the rank scorer");
+
+  // Needed metrics and the newest-first baseline share one relevance label.
+  const query = ({ id, needed, rank, newestRank }) => ({
+    runId: "sealed-fixture", queryId: id,
+    retrievalNeeded: needed, carriage: needed ? "recoverable" : "visible-raw",
+    candidates: [
+      { id: "hit", rank, newestRank, relevant: true },
+      { id: "miss", rank: rank === 1 ? 2 : 1, newestRank: newestRank === 1 ? 2 : 1, relevant: false },
+    ],
+  });
+  const summary = summarizeRetrievalRankQueries([
+    query({ id: "top", needed: true, rank: 1, newestRank: 7 }),
+    query({ id: "shortlist", needed: true, rank: 4, newestRank: 1 }),
+    query({ id: "deep", needed: true, rank: 9, newestRank: 8 }),
+    query({ id: "visible", needed: false, rank: 1, newestRank: 1 }),
+  ]);
+  assert.equal(summary.neededQuestions, 3);
+  assert.equal(summary.queries, 4);
+  assert.deepEqual(summary.hits, { bm25At1: 1, bm25At5: 2, newestFirstAt1: 1, newestFirstAt5: 1 });
+  assert.equal(summary.recallAt1, 1 / 3);
+  assert.equal(summary.recallAt5, 2 / 3);
+  assert.throws(() => summarizeRetrievalRankQueries([{
+    runId: "sealed-fixture", queryId: "orphan", retrievalNeeded: true, carriage: "recoverable",
+    candidates: [{ id: "only", rank: 1, newestRank: 1, relevant: false }],
+  }]), /retrieval-rank-needed-without-relevant-candidate:sealed-fixture\/orphan/,
+  "a needed question without a relevant candidate scored as a miss instead of refusing");
+
+  // The pre-registered decision: floor refusal by name, kill before promote, and the
+  // exact boundary the sealed sweep landed on: recallAt5 of exactly 0.60 is not a kill.
+  assert.throws(() => retrievalRankVerdict({
+    neededQuestions: 19, recallAt1: 1, recallAt5: 1, newestFirstRecallAt1: 0,
+  }), /retrieval-rank-needed-floor:19<20/,
+  "a corpus below the needed floor was scored instead of refused");
+  assert.equal(retrievalRankVerdict({
+    neededQuestions: 20, recallAt1: 0.5, recallAt5: 0.55, newestFirstRecallAt1: 0.2,
+  }).verdict, "kill");
+  const killBeforePromote = retrievalRankVerdict({
+    neededQuestions: 20, recallAt1: 0.5, recallAt5: 0.85, newestFirstRecallAt1: 0.45,
+  });
+  assert.equal(killBeforePromote.verdict, "kill",
+    "a scorer promoted while failing to beat newest-first by the pre-registered margin");
+  assert.match(killBeforePromote.reasons.join(" "), /newest-first/);
+  assert.equal(retrievalRankVerdict({
+    neededQuestions: 20, recallAt1: 0.55, recallAt5: 0.85, newestFirstRecallAt1: 0.1,
+  }).verdict, "promote");
+  assert.equal(retrievalRankVerdict({
+    neededQuestions: 20, recallAt1: 0.3, recallAt5: 0.7, newestFirstRecallAt1: 0.1,
+  }).verdict, "neither");
+  assert.equal(retrievalRankVerdict({
+    neededQuestions: 30, recallAt1: 0.3, recallAt5: 0.6, newestFirstRecallAt1: 0.1,
+  }).verdict, "neither",
+  "recallAt5 of exactly 0.60 sits on the kill line and must not kill");
+
+  const rankSource = source("scripts/probe_retrieval_rank.mjs");
+  assert(!rankSource.includes("api.openai.com") &&
+    !rankSource.includes("OPENAI_API_KEY") &&
+    !rankSource.includes("fetch("),
+  "the rank falsifier contains a provider or network path");
+  assert(!rankSource.includes("context.suggestion") &&
+    !rankSource.includes("registerTool") &&
+    !rankSource.includes("registerMessageRenderer"),
+  "the rank falsifier gained a carrier or shipped runtime surface");
+  assert(rankSource.includes("active-context mark nomination is\n// outside this build") ||
+    rankSource.includes("active-context mark nomination is outside this build"),
+  "the rank falsifier does not state its experiment-only boundary");
+  assert(rankSource.includes("no threshold may rescue failure"),
+  "the rank falsifier does not state the no-threshold rule");
+  assert(rankSource.includes(".slice(0,") === false,
+  "the rank falsifier slices candidate evidence");
+  const rankHelp = spawnSync(process.execPath,
+    [join(PROJECT, "scripts", "probe_retrieval_rank.mjs"), "--help"],
+    { encoding: "utf8" });
+  assert.equal(rankHelp.status, 0, rankHelp.stderr);
+  assert.match(rankHelp.stdout, /no provider\s*\n?or network calls|no provider/);
+
+checks.aRankOnlyBm25FalsifierScoresCompleteEvidenceAgainstPreRegisteredLines = true;
+}
+
+// GATE 93 - the cold-detection shadow judges ordering, and labels never reach its scorer.
+//
+// The conductor test from the neighbouring project runs at this project's bar: units are the
+// runtime's own fold records' DIRECT raw contributions (a brief-only parent is excluded by
+// name, never double-counted through its children), cohorts group records by the nearest
+// preceding provider request, and eligibility carries the freshness fence. The registered
+// line is ordering quality because this runtime folds every completed batch and equal-count
+// selection is near-vacuous: the cold ordering must place later-needed units strictly later
+// than the staleness ordering, an unrankable unit leaves BOTH orderings, a corpus with no
+// later-needed placements refuses by name, and the scorer's own input validation refuses
+// label fields by name. Nothing is promoted either way and no threshold exists to tune.
+// ---------------------------------------------------------------------------
+{
+  assert.equal(COLD_SHADOW_PROTOCOL_VERSION, 1);
+  assert.equal(COLD_SHADOW_SCORER_ID, "qwen3-value-weighted-anchor-ratio-v1");
+  assert.match(COLD_SHADOW_KILL_RULE, /strictly higher mean normalized fold position/);
+
+  // Units: direct raw contributions only; a parent whose parts are all child
+  // folds is brief-only and excluded by name.
+  const record = (foldId, parts) => ({ id: `entry-${foldId}`, data: { fold: { id: foldId, kind: "tool-result", parentId: null, parts } } });
+  const { units, briefOnlyUnitIds } = coldUnitsFromRecords([
+    record("fold-a", [{ kind: "raw", ref: { entryId: "e1" } }, { kind: "raw", ref: { entryId: "e2" } }]),
+    record("fold-b", [{ kind: "raw", ref: { entryId: "e3" } }]),
+    record("fold-parent", [{ kind: "fold", foldId: "fold-a" }, { kind: "fold", foldId: "fold-b" }]),
+  ]);
+  assert.deepEqual(units.map((unit) => unit.unitId), ["fold-a", "fold-b"]);
+  assert.deepEqual(units[0].entryIds, ["e1", "e2"],
+    "a unit flattened through its children instead of keeping direct raw parts");
+  assert.deepEqual(briefOnlyUnitIds, ["fold-parent"]);
+
+  // Cohorts: nearest preceding request; a record before any request is named.
+  const branchIndexById = new Map([
+    ["entry-fold-a", 5], ["entry-fold-b", 12], ["entry-fold-early", 1],
+    ["e1", 2], ["e2", 3], ["e3", 4],
+  ]);
+  const grouped = coldCohorts({
+    units: [
+      { unitId: "fold-early", recordEntryId: "entry-fold-early", entryIds: [] },
+      ...units,
+    ],
+    branchIndexById,
+    requestIndexes: [
+      { momentId: "m4", index: 4 }, { momentId: "m10", index: 10 },
+    ],
+  });
+  assert.deepEqual(grouped.preCommitUnitIds, ["fold-early"],
+    "a record before the first request was scored instead of named");
+  assert.deepEqual(grouped.cohorts.map((cohort) => [cohort.momentId, cohort.unitIds]),
+    [["m4", ["fold-a"]], ["m10", ["fold-b"]]]);
+
+  // Eligibility: existence, not-yet-folded, and the freshness fence.
+  const entryIndexById = new Map([["e1", 2], ["e2", 3], ["e3", 9]]);
+  const unitA = { unitId: "fold-a", entryIds: ["e1", "e2"] };
+  const unitB = { unitId: "fold-b", entryIds: ["e3"] };
+  assert.equal(coldEligible({ unit: unitA, momentIndex: 4, fenceIndex: 3, foldedSet: new Set(), entryIndexById }), true);
+  assert.equal(coldEligible({ unit: unitA, momentIndex: 4, fenceIndex: 2, foldedSet: new Set(), entryIndexById }), false,
+    "a unit past the freshness fence stayed eligible");
+  assert.equal(coldEligible({ unit: unitA, momentIndex: 4, fenceIndex: 3, foldedSet: new Set(["fold-a"]), entryIndexById }), false);
+  assert.equal(coldEligible({ unit: unitB, momentIndex: 4, fenceIndex: 99, foldedSet: new Set(), entryIndexById }), false,
+    "a unit whose entries had not arrived yet was eligible");
+
+  // Selection: deterministic coldest-first; a refused (non-finite) unit is not selectable.
+  const ratios = new Map([["u1", 0.5], ["u2", 0.1], ["u3", Number.NaN], ["u4", 0.1]]);
+  assert.deepEqual(coldSelect({ eligibleUnitIds: ["u1", "u2", "u3", "u4"], ratios, count: 2 }),
+    ["u2", "u4"], "cold selection is not deterministic coldest-first with id tie-break");
+  assert.deepEqual(coldSelect({ eligibleUnitIds: ["u3"], ratios, count: 1 }), [],
+    "a scoring refusal became selectable");
+
+  // Ordering verdict: cold saves the needed unit -> not killed; cold buries it -> killed.
+  const comparisonRun = (needRatio, coldRatioOther) => ({
+    runs: [{
+      runId: "fixture",
+      units: [
+        { unitId: "old-needed", bytes: 10, newestEntryIndex: 1 },
+        { unitId: "new-noise", bytes: 10, newestEntryIndex: 2 },
+      ],
+      questions: [],
+      cohorts: [{
+        momentId: "m", momentIndex: 5,
+        stalenessPickIds: ["old-needed", "new-noise"],
+        eligibleUnitIds: ["old-needed", "new-noise"],
+        laterNeededUnitIds: ["old-needed"],
+        scores: [
+          { unitId: "old-needed", ratio: needRatio },
+          { unitId: "new-noise", ratio: coldRatioOther },
+        ],
+      }],
+    }],
+  });
+  const saved = coldComparison(comparisonRun(0.9, 0.1));
+  assert.equal(saved.verdict.killed, false,
+    "cold placed the needed unit last and was still killed");
+  assert.equal(saved.ordering.meanColdPosition, 1);
+  assert.equal(saved.ordering.meanStalenessPosition, 0.5);
+  const buried = coldComparison(comparisonRun(0.1, 0.9));
+  assert.equal(buried.verdict.killed, true,
+    "cold folded the needed unit first and was not killed");
+  assert.equal(buried.verdict.promoted, false);
+  assert.equal(saved.verdict.equalCountReplay.nearVacuous, true,
+    "the equal-count replay lost its vacuity note");
+  assert.throws(() => coldComparison({ runs: [{
+    runId: "fixture", units: [{ unitId: "u", bytes: 1, newestEntryIndex: 1 }],
+    questions: [],
+    cohorts: [{ momentId: "m", momentIndex: 5, stalenessPickIds: ["u"],
+      eligibleUnitIds: ["u"], laterNeededUnitIds: [], scores: [{ unitId: "u", ratio: 0.5 }] }],
+  }] }), /no later-needed placements/,
+  "a corpus that cannot decide the kill line decided it anyway");
+
+  // Point-biserial sanity: separable labels correlate, constant scores refuse to.
+  assert(pointBiserial([
+    { score: 1, label: true }, { score: 2, label: true },
+    { score: -1, label: false }, { score: -2, label: false },
+  ]) > 0.8);
+  assert.equal(pointBiserial([{ score: 1, label: true }, { score: 1, label: false }]), null);
+
+  // The scorer's own boundary: label fields refused, no model or network on the
+  // dry path, every byte scored through complete blocks.
+  const coldSelfTest = spawnSync("python3",
+    [join(PROJECT, "scripts", "probe_attention_cold.py"), "--self-test"],
+    { encoding: "utf8" });
+  assert.equal(coldSelfTest.status, 0, coldSelfTest.stderr);
+  const coldReport = JSON.parse(coldSelfTest.stdout);
+  assert.deepEqual(coldReport.labelFieldsRefused,
+    ["laterNeededUnitIds", "stalenessPickIds", "questions"]);
+  assert(["verified", "torch-unavailable"].includes(coldReport.tensorChecks),
+    "the tensor checks must report their state by name, never fail the pure checks");
+  assert.equal(coldReport.everyByteScored, true);
+  assert.equal(coldReport.modelLoads, 0);
+  assert.equal(coldReport.networkRequests, 0);
+
+  for (const relativePath of ["scripts/probe_cold_shadow.mjs", "scripts/probe_attention_cold.py"]) {
+    const coldSource = source(relativePath);
+    assert(!coldSource.includes("api.openai.com") && !coldSource.includes("fetch(") &&
+      !coldSource.includes("registerTool") && !coldSource.includes("context.suggestion"),
+    `${relativePath} gained a provider, network, or runtime surface`);
+  }
+  assert(source("scripts/probe_cold_shadow.mjs")
+    .includes("low attention alone must never commit a fold"),
+  "the cold shadow does not state the nomination boundary");
+  assert(source("scripts/probe_attention_cold.py")
+    .includes("every byte is scored and nothing is sliced away"),
+  "the cold scorer does not state complete block coverage");
+
+checks.aColdDetectionShadowJudgesOrderingWithLabelsSealedFromItsScorer = true;
+}
+
+// ---------------------------------------------------------------------------
+// Every prior surfacing scorer read one number off a frozen forward pass and
+// died at the action boundary. Gate 94 pins the first generative mechanism: one
+// comparative prompt carrying every fold's complete expansion, an explicit null
+// answer instead of a threshold, and order invariance as the decision rule.
+// Both candidate orders must name the same fold or the judge abstains under the
+// disagreement's own name; a malformed answer, an unknown fold, trailing text
+// and a generation-bound hit each abstain by name too. An offer is correct only
+// when a positive event's named fold is the exact theme fold; naming the theme
+// fold on an already-visible event is a false interruption. The development
+// gate is the pre-registered precision-first line (at least four offers, none
+// false) and a pass owes a FRESH split, because this fixture's validation split
+// was read during the gate 91 rejection; the probe cannot reach the burned
+// split at all, and the dry path loads no model and touches no network.
+// ---------------------------------------------------------------------------
+{
+  const judgeScript = join(PROJECT, "scripts", "probe_attention_toolcall_judge.py");
+  const driver = `
+import json
+import probe_attention_toolcall_judge as judge
+
+fold_ids = {"J1", "J2"}
+
+def caught(fn):
+    try:
+        fn()
+        return None
+    except SystemExit as err:
+        return str(err)
+
+folds = [
+    {"foldId": "J1", "parentFoldId": None, "depth": 0, "expandedContent": "alpha evidence"},
+    {"foldId": "J2", "parentFoldId": "J1", "depth": 1, "expandedContent": "beta evidence"},
+]
+case = {"eventKind": "stop", "activeContext": "ctx", "task": "task"}
+forward = judge.judge_user_prompt(case, folds)
+reverse = judge.judge_user_prompt(case, list(reversed(folds)))
+
+def rows(spec):
+    return [{"class": cls, "offered": offered, "correct": correct}
+            for cls, offered, correct in spec]
+
+print(json.dumps({
+    "constants": {
+        "scorerId": judge.SCORER_ID,
+        "maxNewTokens": judge.MAX_NEW_TOKENS,
+        "minimumOffers": judge.MINIMUM_OFFERS,
+        "requiredPrecision": judge.REQUIRED_PRECISION,
+        "expectedRevision": judge.EXPECTED_REVISION,
+    },
+    "parse": {
+        "clean": judge.parse_judge_answer('{"expand": "J1"}', fold_ids),
+        "preambleNull": judge.parse_judge_answer(
+            'The context already holds it. {"expand": null}', fold_ids),
+        "unknownFold": judge.parse_judge_answer('{"expand": "J9"}', fold_ids),
+        "trailing": judge.parse_judge_answer('{"expand": "J1"} because', fold_ids),
+        "twoObjects": judge.parse_judge_answer(
+            '{"expand": "J1"} {"expand": "J2"}', fold_ids),
+        "noObject": judge.parse_judge_answer('expand J1', fold_ids),
+    },
+    "decisions": {
+        "agree": judge.judge_decision({"answer": "J1"}, {"answer": "J1"}),
+        "disagree": judge.judge_decision({"answer": "J1"}, {"answer": "J2"}),
+        "oneNull": judge.judge_decision({"answer": "J1"}, {"answer": None}),
+        "bothNull": judge.judge_decision({"answer": None}, {"answer": None}),
+        "boundHit": judge.judge_decision(
+            {"malformed": "generation-bound-hit"}, {"answer": "J1"}),
+    },
+    "outcomes": {
+        "positiveTheme": judge.judge_offer_outcome(
+            {"class": "positive", "themeFoldId": "J1"},
+            {"action": "offer", "foldId": "J1"}),
+        "alreadyVisibleTheme": judge.judge_offer_outcome(
+            {"class": "already-visible", "themeFoldId": "J1"},
+            {"action": "offer", "foldId": "J1"}),
+        "positiveWrongFold": judge.judge_offer_outcome(
+            {"class": "positive", "themeFoldId": "J1"},
+            {"action": "offer", "foldId": "J2"}),
+        "abstain": judge.judge_offer_outcome(
+            {"class": "positive", "themeFoldId": "J1"},
+            {"action": "abstain", "reason": "both-null"}),
+    },
+    "gates": {
+        "earns": judge.development_gate(rows(
+            [("positive", True, True)] * 4 + [("no-relevant", False, None)] * 4)),
+        "tainted": judge.development_gate(rows(
+            [("positive", True, True)] * 4 + [("already-visible", True, False)])),
+        "sparse": judge.development_gate(rows([("positive", True, True)] * 3)),
+    },
+    "prompt": {
+        "forwardHasBoth": "alpha evidence" in forward and "beta evidence" in forward,
+        "orderMatters": forward != reverse,
+        "duplicateRefusal": caught(
+            lambda: judge.judge_user_prompt(case, [folds[0], folds[0]])),
+        "singleFoldRefusal": caught(
+            lambda: judge.judge_user_prompt(case, [folds[0]])),
+    },
+}))
+`;
+  const driven = spawnSync("python3", ["-c", driver], {
+    cwd: join(PROJECT, "scripts"),
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(driven.status, 0, driven.stderr);
+  const judged = JSON.parse(driven.stdout);
+
+  assert.equal(judged.constants.scorerId, "granite3.3-comparative-toolcall-judge-v1");
+  assert.equal(judged.constants.minimumOffers, 4);
+  assert.equal(judged.constants.requiredPrecision, 1);
+  assert.equal(judged.constants.maxNewTokens, 160);
+  assert.equal(judged.constants.expectedRevision,
+    "707f574c62054322f6b5b04b6d075f0a8f05e0f0");
+
+  // Strict parse: exactly one answer object, the fold must exist, and nothing
+  // may follow the answer; reasoning BEFORE the object is allowed.
+  assert.deepEqual(judged.parse.clean, { answer: "J1" });
+  assert.deepEqual(judged.parse.preambleNull, { answer: null },
+    "reasoning before the answer object was treated as malformed");
+  assert.equal(judged.parse.unknownFold.malformed, "unknown-fold:J9");
+  assert.equal(judged.parse.trailing.malformed, "text-after-answer");
+  assert.equal(judged.parse.twoObjects.malformed, "answer-objects:2");
+  assert.equal(judged.parse.noObject.malformed, "answer-objects:0");
+
+  // Order invariance: only two clean passes naming the same fold offer.
+  assert.deepEqual(judged.decisions.agree, { action: "offer", foldId: "J1" });
+  assert.equal(judged.decisions.disagree.action, "abstain",
+    "a judge that ignores candidate order offered anyway");
+  assert.match(judged.decisions.disagree.reason, /^order-disagreement:/);
+  assert.deepEqual(judged.decisions.oneNull,
+    { action: "abstain", reason: "one-null" },
+    "one pass answering null still produced an offer");
+  assert.deepEqual(judged.decisions.bothNull,
+    { action: "abstain", reason: "both-null" });
+  assert.equal(judged.decisions.boundHit.reason,
+    "malformed-forward:generation-bound-hit",
+    "a generation-bound hit was not a named refusal");
+
+  // Labels join AFTER the decision, and precision has no leniency.
+  assert.deepEqual(judged.outcomes.positiveTheme, { offered: true, correct: true });
+  assert.deepEqual(judged.outcomes.alreadyVisibleTheme,
+    { offered: true, correct: false },
+    "an interruption on already-visible evidence was scored correct");
+  assert.deepEqual(judged.outcomes.positiveWrongFold,
+    { offered: true, correct: false },
+    "the wrong fold on a positive event was scored correct");
+  assert.deepEqual(judged.outcomes.abstain, { offered: false, correct: null });
+
+  // The pre-registered development line, probed both ways around it.
+  assert.equal(judged.gates.earns.earnsValidation, true);
+  assert.equal(judged.gates.earns.validation, "owes-a-fresh-split",
+    "a development pass forgot the burned validation split");
+  assert.equal(judged.gates.tainted.earnsValidation, false,
+    "one false offer did not kill the development gate");
+  assert.equal(judged.gates.tainted.validation, "dead-at-development");
+  assert.equal(judged.gates.sparse.earnsValidation, false,
+    "three offers earned validation below the pre-registered minimum");
+
+  // The comparative prompt carries every fold whole and order is real.
+  assert.equal(judged.prompt.forwardHasBoth, true,
+    "a fold's complete expansion was missing from the comparative prompt");
+  assert.equal(judged.prompt.orderMatters, true);
+  assert.match(judged.prompt.duplicateRefusal, /duplicate-fold:J1/);
+  assert.match(judged.prompt.singleFoldRefusal, /needs-at-least-two-folds/);
+
+  // The default path loads no model, makes no network request, and the judge
+  // carries no threshold anywhere.
+  const judgeDryRun = spawnSync("python3", [judgeScript], {
+    encoding: "utf8",
+    env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1" },
+  });
+  assert.equal(judgeDryRun.status, 0, judgeDryRun.stderr);
+  const judgeDry = JSON.parse(judgeDryRun.stdout);
+  assert.equal(judgeDry.live, false);
+  assert.equal(judgeDry.modelLoads, 0);
+  assert.equal(judgeDry.networkRequests, 0);
+  assert.equal(judgeDry.developmentCases, 40);
+  assert.equal(judgeDry.selfTest.thresholds, 0, "the judge grew a threshold");
+  assert.equal(judgeDry.selfTest.orderInvarianceRequired, true);
+  assert.equal(judgeDry.selfTest.developmentSplitOnly, true);
+
+  const judgeSource = source("scripts/probe_attention_toolcall_judge.py");
+  assert(!judgeSource.includes("api.openai.com") && !judgeSource.includes("fetch(") &&
+    !judgeSource.includes("requests.") && !judgeSource.includes("registerTool"),
+  "the judge gained a provider, network, or runtime surface");
+  assert(!judgeSource.includes('["splits"]["validation"]'),
+    "the judge reached for the burned validation split");
+  assert(judgeSource.includes("K) is burned"),
+    "the judge does not state why validation is withheld");
+
+checks.aComparativeToolCallJudgeOffersOnlyUnderOrderInvariance = true;
+}
+
+// ---------------------------------------------------------------------------
+// The 2026-08-16 probe sent the documented explicit prompt-cache fields and the
+// subscription endpoint rejected them; the platform docs read 2026-08-19 say
+// GPT-5.6+ accepts them. Gate 95 pins the re-test's contract: attribution is
+// control-first (a repetition whose implicit control fails is an envelope
+// failure and yields NO field verdict), an explicit-lane rejection is named
+// with the provider's own status and error, acceptance is judged by a
+// byte-identical reuse reading at least the cacheable minimum, disagreement
+// across repetitions is verdict "mixed" by name, the marked input touches only
+// the final block without mutating its source, the explicit payload check
+// refuses ceiling fields and unmarked inputs, and the dry run is zero-network.
+// ---------------------------------------------------------------------------
+{
+  const bp = await import(pathToFileURL(join(PROJECT, "scripts", "probe_subscription_cache_breakpoint.mjs")).href);
+  assert.deepEqual({ ...bp.BREAKPOINT_REQUEST_OPTIONS }, { mode: "explicit" });
+  assert.deepEqual({ ...bp.BREAKPOINT_BLOCK_MARKER }, { mode: "explicit" });
+  assert.deepEqual([...bp.BREAKPOINT_SEQUENCE],
+    ["implicit-control", "explicit-first", "explicit-reuse"]);
+  assert.deepEqual([...bp.BREAKPOINT_OUTCOMES], [
+    "envelope-failure", "rejected-by-name", "accepted-without-reuse-evidence", "accepted-effective",
+  ]);
+
+  const sourceInput = [
+    { type: "message", role: "developer", content: [{ type: "input_text", text: "stable" }] },
+    { type: "message", role: "user", content: [{ type: "input_text", text: "Return exactly OK." }] },
+  ];
+  const marked = bp.markedExplicitInput(sourceInput);
+  assert.equal(marked.at(-1).content.at(-1).prompt_cache_breakpoint.mode, "explicit",
+    "the final block must carry the explicit breakpoint marker");
+  assert.equal("prompt_cache_breakpoint" in marked[0].content[0], false,
+    "only the final block is marked");
+  assert.equal("prompt_cache_breakpoint" in sourceInput.at(-1).content.at(-1), false,
+    "marking must never mutate the source input");
+
+  const payload = {
+    prompt_cache_key: "pf-cache-x", input: marked,
+    prompt_cache_options: { mode: "explicit" },
+  };
+  assert.equal(bp.assertExplicitSubscriptionPayload(payload,
+    { cacheKey: "pf-cache-x", input: marked }), true);
+  assert.throws(() => bp.assertExplicitSubscriptionPayload(
+    { ...payload, max_output_tokens: 100 }, { cacheKey: "pf-cache-x", input: marked }),
+  /must not carry max_output_tokens/, "a ceiling field slipped through the explicit lane");
+  assert.throws(() => bp.assertExplicitSubscriptionPayload(
+    { prompt_cache_key: "pf-cache-x", input: marked },
+    { cacheKey: "pf-cache-x", input: marked }),
+  /prompt_cache_options/, "an explicit lane without the request-level mode passed");
+  assert.throws(() => bp.assertExplicitSubscriptionPayload(
+    { ...payload, input: sourceInput }, { cacheKey: "pf-cache-x", input: sourceInput }),
+  /explicit breakpoint/, "an unmarked input passed the explicit lane");
+
+  const row = (label, over = {}) => ({
+    repetition: 1, label, httpStatus: 200, stopReason: "stop",
+    usage: { cacheRead: 0 }, ...over,
+  });
+  const sickEnvelope = bp.classifyBreakpointRepetition([
+    row("implicit-control", { httpStatus: 500, stopReason: "error", error: "upstream" }),
+    row("explicit-first", { httpStatus: 400, stopReason: "error", error: "unknown field" }),
+  ]);
+  assert.equal(sickEnvelope.outcome, "envelope-failure");
+  assert.equal(sickEnvelope.fieldVerdict, false,
+    "a rejection over a sick envelope became a field verdict");
+  const rejected = bp.classifyBreakpointRepetition([
+    row("implicit-control"),
+    row("explicit-first", {
+      httpStatus: 400, stopReason: "error",
+      error: "Unknown parameter: prompt_cache_options",
+    }),
+  ]);
+  assert.equal(rejected.outcome, "rejected-by-name");
+  assert.match(rejected.detail, /prompt_cache_options/,
+    "the rejection must carry the provider's own words");
+  const effective = bp.classifyBreakpointRepetition([
+    row("implicit-control"),
+    row("explicit-first", { usage: { cacheRead: 0, cacheWrite: 2048 } }),
+    row("explicit-reuse", { usage: { cacheRead: 2048 } }),
+  ]);
+  assert.equal(effective.outcome, "accepted-effective");
+  assert.equal(effective.reuseCacheRead, 2048);
+  const inert = bp.classifyBreakpointRepetition([
+    row("implicit-control"),
+    row("explicit-first"),
+    row("explicit-reuse", { usage: { cacheRead: 0 } }),
+  ]);
+  assert.equal(inert.outcome, "accepted-without-reuse-evidence",
+    "acceptance without reuse evidence must not read as effective");
+
+  const mixedRows = [
+    row("implicit-control"), row("explicit-first"),
+    { ...row("explicit-reuse", { usage: { cacheRead: 2048 } }) },
+    { ...row("implicit-control"), repetition: 2 },
+    { ...row("explicit-first", { httpStatus: 400, stopReason: "error", error: "no" }), repetition: 2 },
+  ];
+  const mixed = bp.summarizeBreakpointProbe(mixedRows, 2);
+  assert.equal(mixed.verdict, "mixed", "disagreeing repetitions must be named mixed");
+  assert.equal(bp.summarizeBreakpointProbe(mixedRows.slice(0, 3), 1).verdict,
+    "accepted-effective");
+
+  const bpDryRun = spawnSync("node",
+    [join(PROJECT, "scripts", "probe_subscription_cache_breakpoint.mjs")], { encoding: "utf8" });
+  assert.equal(bpDryRun.status, 0, bpDryRun.stderr);
+  const bpDry = JSON.parse(bpDryRun.stdout);
+  assert.equal(bpDry.live, false);
+  assert.equal(bpDry.networkRequests, 0);
+  assert.equal(bpDry.manifest.requestCount, 9);
+  assert.equal(bpDry.endpoint, "https://chatgpt.com/backend-api/codex/responses");
+
+checks.aBreakpointRetestAttributesAcceptanceOnlyOverAHealthyEnvelope = true;
+}
+
+// ---------------------------------------------------------------------------
+// Gate 96: the steward uptake lens. The steward advisory (runtime gate 138)
+// emits one context.steward per band crossing; Build 2's question is whether
+// the invitation is TAKEN. The lens reads only the canonical stream: a
+// crossing's window ends at the next applied context.commit, because that is
+// the epoch the invitation raced against; uptake is an accepted agent fold
+// attempt inside the window; an attempt before the crossing, a failed attempt,
+// a deferred commit, and a ladder fold each count for nothing. A pre-steward
+// session reads zero crossings with a NULL take share, never a fabricated one.
+// Build 4a added the DIRECTED ask, which is delivered as a followUp the commit
+// never waits for, so its answer structurally lands after the commit closed
+// the window (sol-20260820 rep 5: the accepted rebrief landed two ordinals
+// past the commit and the take share read 0 over a real uptake). A directed
+// crossing therefore also reads an ANSWER window to the next directed
+// crossing; absorbed, advisory-only, and pre-directed crossings read null.
+// READ-SIDE ONLY, as of 2026-08-21: `rebrief` is deleted from the runtime, so no
+// session recorded from that build forward carries one. Every steward-era campaign
+// does, and the corpus is immutable, so the lens and these fixtures keep the action.
+// ---------------------------------------------------------------------------
+{
+  const event = (kind, data = {}) => ({
+    type: "custom",
+    customType: "pi-fold-active-context-event",
+    data: { kind, ...data },
+  });
+  const foldAttempt = (over = {}) => event("context.attempt",
+    { action: "fold", ok: true, marks_requested: 1, ...over });
+
+  const taken = contextEventMetrics([
+    foldAttempt({ seq: 1 }),
+    event("context.steward", { seq: 2, largest_candidate: "entry-9", unmarked_tokens: 4_000 }),
+    foldAttempt({ seq: 3, marks_requested: 2 }),
+    event("context.commit", { seq: 4, deferred: false }),
+    event("context.steward", { seq: 5, largest_candidate: "entry-3", unmarked_tokens: 900 }),
+    event("context.commit", { seq: 6, deferred: false }),
+  ]).steward;
+  assert.equal(taken.crossings, 2);
+  assert.equal(taken.takenCrossings, 1, "only the crossing with an in-window attempt is taken");
+  assert.equal(taken.takeShare, 0.5);
+  assert.equal(taken.windows[0].acceptedFoldAttempts, 1,
+    "the attempt before the crossing was counted into its window");
+  assert.equal(taken.windows[0].marksRequested, 2);
+  assert.equal(taken.windows[0].largestCandidate, "entry-9");
+  assert.equal(taken.windows[1].taken, false);
+
+  const boundaries = contextEventMetrics([
+    event("context.steward", { seq: 1 }),
+    event("context.commit", { seq: 2, deferred: true }),
+    foldAttempt({ seq: 3 }),
+    event("context.commit", { seq: 4, deferred: false }),
+    event("context.steward", { seq: 5 }),
+    foldAttempt({ seq: 6, ok: false }),
+    event("context.fold", { seq: 7, origin: "automatic", source_chars: 100 }),
+  ]).steward;
+  assert.equal(boundaries.windows[0].taken, true,
+    "a deferred commit ended the window early");
+  assert.equal(boundaries.windows[1].taken, false,
+    "a failed attempt or a ladder fold read as uptake");
+  assert.equal(boundaries.crossings, 2);
+
+  // Rebrief is the production-shape uptake: under pressure the ladder claims
+  // everything, so the invitation the agent can always take is a rebrief on a
+  // standing deterministic-brief fold. A read action is never uptake.
+  const rebriefTaken = contextEventMetrics([
+    event("context.steward", { seq: 1, newest_rebrief_target: "fold-7" }),
+    event("context.attempt", { seq: 2, action: "peek", ok: true }),
+    event("context.attempt", { seq: 3, action: "rebrief", ok: true }),
+    event("context.commit", { seq: 4, deferred: false }),
+  ]).steward;
+  assert.equal(rebriefTaken.windows[0].taken, true,
+    "an accepted rebrief in the window is uptake");
+  assert.equal(rebriefTaken.acceptedRebriefsInWindows, 1);
+  assert.equal(rebriefTaken.windows[0].acceptedFoldAttempts, 0);
+  assert.equal(rebriefTaken.windows[0].newestRebriefTarget, "fold-7",
+    "the pre-rename newest_rebrief_target field stopped being readable");
+  const renamed = contextEventMetrics([
+    event("context.steward", { seq: 1, top_rebrief_target: "fold-9", directed: true }),
+    event("context.commit", { seq: 2, deferred: false }),
+  ]).steward;
+  assert.equal(renamed.windows[0].newestRebriefTarget, "fold-9",
+    "the largest-first top_rebrief_target field is not read");
+  const peekOnly = contextEventMetrics([
+    event("context.steward", { seq: 1 }),
+    event("context.attempt", { seq: 2, action: "peek", ok: true }),
+    event("context.commit", { seq: 3, deferred: false }),
+  ]).steward;
+  assert.equal(peekOnly.windows[0].taken, false, "a peek read as steward uptake");
+
+  // The rep-5 shape: the commit closes the directed crossing's window before
+  // the followUp answer arrives, and the rebrief lands after it. The commit
+  // window must still read not-taken (it raced and lost) while the answer
+  // window credits the ask; a rebrief past the NEXT directed crossing answers
+  // that one, never the earlier ask, because a withdrawn ask prompts nothing.
+  const directedRun = contextEventMetrics([
+    event("context.steward", { seq: 1, directed: true, top_rebrief_target: "fold-a" }),
+    event("context.commit", { seq: 2, deferred: false }),
+    event("context.steward", { seq: 3, directed: true, top_rebrief_target: "fold-b" }),
+    event("context.commit", { seq: 4, deferred: false }),
+    event("context.attempt", { seq: 5, action: "rebrief", ok: true }),
+  ]).steward;
+  assert.equal(directedRun.windows[0].answered, false,
+    "a rebrief past the next directed crossing answered the earlier ask");
+  assert.equal(directedRun.windows[0].taken, false);
+  assert.equal(directedRun.windows[1].answered, true,
+    "the answer window did not credit the rebrief that landed after the commit");
+  assert.equal(directedRun.windows[1].taken, false,
+    "the commit window claimed an answer it raced past");
+  assert.equal(directedRun.directedCrossings, 2);
+  assert.equal(directedRun.answeredCrossings, 1);
+  assert.equal(directedRun.answerShare, 0.5);
+  // An absorbed crossing (standing ask, no new send) and an advisory-only
+  // degrade crossing open no answer window; the share's denominator is the
+  // DIRECTED crossings alone, so absorption never dilutes it.
+  const absorbedRun = contextEventMetrics([
+    event("context.steward", { seq: 1, directed: true }),
+    event("context.steward", { seq: 2, directed: false, outstanding_ask: true }),
+    event("context.attempt", { seq: 3, action: "rebrief", ok: true }),
+    event("context.commit", { seq: 4, deferred: false }),
+  ]).steward;
+  assert.equal(absorbedRun.windows[1].answered, null,
+    "an absorbed crossing opened its own answer window");
+  assert.equal(absorbedRun.windows[0].answered, true,
+    "the standing ask was not credited across an absorbed crossing");
+  assert.equal(absorbedRun.directedCrossings, 1);
+  assert.equal(absorbedRun.answerShare, 1);
+  const advisoryOnly = contextEventMetrics([
+    event("context.steward", { seq: 1 }),
+    event("context.commit", { seq: 2, deferred: false }),
+  ]).steward;
+  assert.equal(advisoryOnly.windows[0].answered, null,
+    "a pre-directed crossing fabricated an answer reading");
+  assert.equal(advisoryOnly.answerShare, null,
+    "a session with no directed crossing fabricated an answer share");
+
+  const preSteward = contextEventMetrics([
+    foldAttempt({ seq: 1 }),
+    event("context.commit", { seq: 2, deferred: false }),
+  ]).steward;
+  assert.equal(preSteward.crossings, 0);
+  assert.equal(preSteward.takeShare, null,
+    "a pre-steward session fabricated a take share");
+
+  assert(source("scripts/extract_campaign_metrics.mjs")
+    .includes("steward: run.contextEvents.steward ?? null"),
+  "the campaign extract drops the steward uptake lens");
+
+checks.aStewardCrossingIsTakenOnlyByAnAcceptedAgentMarkInItsWindow = true;
+}
+
+// ---------------------------------------------------------------------------
+// Gate 97: a zero-usage abort marker may lack its witness, spend never.
+// Rep 5 of sol-20260820-steward failed the two-witness check with 172
+// assistant messages against 171 response records. The first diagnosis, a
+// directed turn delivered past the recorder, was WRONG and is recorded as
+// such: the directed turn was ledger-recorded end to end (request 571,
+// response 572, input 78,003). The unpaired message was Pi's abort marker,
+// an assistant message with stopReason "error" and an all-zero usage block
+// ("This operation was aborted"), persisted when a queued followUp delivery
+// aborted the request build in flight; nothing was transmitted, so nothing
+// could be recorded. The SECOND wrongness arrived the same day: the first
+// netting asserted series + markers === requests, reading every marker as
+// unledgered, and native rep 6 refused a clean run whose zero-usage error
+// ("Your input exceeds the context window") was provider-delivered and
+// therefore ledger-recorded, 105 responses against 105 messages with one
+// marker. The unledgered count is DERIVED (requests - responses), bounded
+// by [0, markers]: every unwitnessed message must be a zero-usage marker,
+// a witnessed marker owes nothing, a spend-carrying unpaired message still
+// fails, and an extra ledger row fails the other way. The gate drives the
+// marker discrimination and the reconciliation as functions and pins the
+// adjudicator's use of both.
+{
+  const { abortMarkerMessages, reconcileWitnessCount } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_experiment.mjs")));
+  const assistant = (stopReason, usage, errorMessage) => ({
+    type: "message",
+    message: { role: "assistant", content: [], usage, stopReason,
+      ...(errorMessage ? { errorMessage } : {}) },
+  });
+  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+  const entries = [
+    assistant("toolUse", { input: 10, output: 2, totalTokens: 12 }),
+    assistant("error", zeroUsage, "This operation was aborted"),
+    assistant("error", { input: 500, output: 0, totalTokens: 500 }, "server error"),
+    assistant("stop", { input: 20, output: 3, totalTokens: 23 }),
+    { type: "custom", customType: "pi-fold-active-context-event" },
+  ];
+  const markers = abortMarkerMessages(entries);
+  assert.equal(markers.length, 1, "the zero-usage abort marker was not excluded");
+  assert.equal(markers[0].entryIndex, 1);
+  assert.equal(markers[0].errorMessage, "This operation was aborted");
+  // The spend-carrying error is deliberately NOT a marker: a generation that
+  // billed 500 input tokens must stay inside the witness count, unrecorded
+  // spend being exactly what the two witnesses exist to catch.
+  assert(!markers.some((marker) => marker.entryIndex === 2),
+    "an error message carrying spend was excluded from the witness count");
+  // The reconciliation, driven as a function through the four classes the
+  // corpus has produced: rep 5's unledgered local abort, native rep 6's
+  // witnessed provider error, a spend-carrying message missing its witness,
+  // and a ledger holding more responses than the session has messages.
+  const rep5 = reconcileWitnessCount({ requests: 172, responses: 171, markers: 1 });
+  assert.equal(rep5.ok, true, "the unledgered local abort no longer reconciles");
+  assert.equal(rep5.unledgered, 1);
+  const nativeRep6 = reconcileWitnessCount({ requests: 105, responses: 105, markers: 1 });
+  assert.equal(nativeRep6.ok, true,
+    "a provider-delivered zero-usage error with its exchange in the ledger was refused");
+  assert.equal(nativeRep6.unledgered, 0);
+  assert.equal(reconcileWitnessCount({ requests: 105, responses: 104, markers: 0 }).ok, false,
+    "a spend-carrying message missing its witness reconciled");
+  assert.equal(reconcileWitnessCount({ requests: 104, responses: 105, markers: 1 }).ok, false,
+    "a ledger holding more responses than the session has messages reconciled");
+  assert.equal(reconcileWitnessCount({ requests: 100, responses: 97, markers: 2 }).ok, false,
+    "more unwitnessed messages than zero-usage markers reconciled");
+  const adjudicator = source("scripts/adjudicate_pi_context_experiment.mjs");
+  assert(adjudicator.includes("abortMarkerMessages(runEntries)") &&
+    adjudicator.includes("reconcileWitnessCount({") &&
+    adjudicator.includes("zero-usage abort marker(s), ") &&
+    adjudicator.includes("unledgeredAbortMarkers: witness.unledgered,"),
+  "the adjudicator does not net and report the abort markers");
+
+checks.aZeroUsageAbortMarkerIsExcludedAndReportedSpendNever = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 73 - the sandbox is the boundary, not the tool list.
+//
+// The arms ran on three tools because Pi's `read` resolves any path against cwd
+// with no guard, the session file sat one level ABOVE the checkout, and the run
+// config named the plan holding every graded answer. Restoring the tool surface
+// stock Pi actually ships (`bash`, `edit`, `find`, `grep`, `ls`, `read`, `write`)
+// is only honest once the key is ABSENT from the namespace rather than denied
+// inside it, because `bash` walks straight past an in-process fence.
+//
+// This gate drives the real thing: it builds the argv, runs bubblewrap, and asks
+// the sandboxed process what it can see. A source match would prove nothing here,
+// since the whole claim is about what the kernel does with those arguments.
+// ---------------------------------------------------------------------------
+{
+  // THE SCAN WORKS BEFORE IT IS TRUSTED. The verifier's own fixtures quote seeded
+  // values verbatim, so it is the proof that an empty result means something.
+  assert(seededTokenCarriers(PROJECT, ["scripts/verify_pi_context_experiment.mjs"]).length === 1,
+    "the seeded-token scan misses a file that carries seeded values, so an empty result is vacuous");
+  assert.deepEqual(seededTokenCarriers(PROJECT), [],
+    "a file copied into the namespace carries seeded ledger values");
+  assert(!HARNESS_SOURCE.includes("scripts/verify_pi_context_experiment.mjs"),
+    "the verifier would be copied into the namespace");
+
+  // THE PLAN THE WORKER HOLDS carries geometry and nothing else. Built by
+  // whitelist, so a field added to the full plan cannot arrive by default.
+  const reduced = sandboxPlan(plan);
+  assert.deepEqual(Object.keys(reduced).sort(), [...SANDBOX_PLAN_KEYS].sort(),
+    "the sandboxed plan grew a field");
+  assert.doesNotThrow(() => validateSandboxPlan(reduced),
+    "the plan the supervisor writes is not one the worker will accept");
+  const reducedText = JSON.stringify(reduced);
+  // Keys, not substrings: probeCount and deliverableCount are geometry and belong,
+  // while the content those names also prefix does not.
+  for (const key of ["expectedAnswer", "instructions", "probes", "stages", "codeWord",
+    "ledger", "deliverable", "chains", "seed"]) {
+    assert(!reducedText.includes(`"${key}":`),
+      `the sandboxed plan still carries graded or instructional material: ${key}`);
+  }
+  // And nothing free-text rode in under a name nobody thought to ban. Every string
+  // in this object is a path, a hash or an identifier.
+  const strings = [...reducedText.matchAll(/"([^"\\]*)"/g)].map((match) => match[1]);
+  assert(strings.every((value) => value.length <= 128 && !value.includes(" ")),
+    "the sandboxed plan carries prose, which is how instructions would arrive");
+  assert.equal(reduced.stageCount, plan.stageCount, "the sandboxed plan lost the stage count");
+  assert(reduced.files.length > 0, "the sandboxed plan lost the corpus it must attest");
+
+  // THE CONFIG THE WORKER HOLDS withholds the query seed. With it and the ledger
+  // geometry the end block is derivable, and a model that can derive the questions
+  // has been told what to remember, which is gate 62's leak wearing a seed.
+  const carried = sandboxConfig({
+    arm: "native", querySeed: "seed-must-not-travel", planPath: "/campaign/stages-full.json",
+    runDir: "/host/run", repoDir: "/host/run/repo", stageCount: 64,
+  }, "the exam text");
+  assert.equal(carried.endBlockPrompt, "the exam text",
+    "the end block did not reach the worker as text");
+  assert.equal(carried.sessionDir, SANDBOX_PATHS.session,
+    "the session file would land somewhere other than its own directory");
+  // EXACTLY ONE CARRIAGE. The old law was that an arm run must be able to produce
+  // an end block; it is kept by requiring the seed or the composed text and
+  // refusing both, so a config cannot quietly reintroduce the seed alongside.
+  const hostConfig = { ...runConfig };
+  assert.throws(() => validateExperimentRunConfig({ ...hostConfig, querySeed: undefined }),
+    /frozen query seed or the composed end block/,
+    "an arm config carrying neither carriage was accepted");
+  assert.throws(() => validateExperimentRunConfig({ ...hostConfig,
+    endBlockPrompt: "the exam text" }), /and not both/,
+  "an arm config carrying the seed AND the composed block was accepted");
+  // The sandboxed shape end to end: the paths the worker will actually see, with
+  // the composed block standing in for the seed it must not hold.
+  const sandboxed = sandboxConfig(hostConfig, "the exam text");
+  assert.doesNotThrow(() => validateExperimentRunConfig(sandboxed),
+    "the config the supervisor writes for the worker is one the worker will refuse");
+  // The sandboxed branch is the STRICTER one: it pins values rather than prefixes. The
+  // discriminator is the CHECKOUT as of 2026-08-25, because the run directory stopped
+  // crossing into the namespace, so the field it pins beside that is the session directory.
+  assert.throws(() => validateExperimentRunConfig({ ...sandboxed, sessionDir: "/elsewhere" }),
+    /does not name the namespace it runs in/,
+    "a config claiming to be sandboxed pointed its session elsewhere");
+  // And a config that names NEITHER shape is not quietly read as the lenient one: moving the
+  // checkout off /work makes it a host config, which owes a run directory carrying its id.
+  assert.throws(() => validateExperimentRunConfig({ ...sandboxed, repoDir: "/elsewhere" }),
+    /Run directory does not carry its run id/,
+    "a config that is neither shape was accepted as one of them");
+  assert(!("querySeed" in carried), "the query seed reached the sandbox");
+  assert(!JSON.stringify(carried).includes("seed-must-not-travel"),
+    "the query seed reached the sandbox under another key");
+  assert(!JSON.stringify(carried).includes("stages-full"),
+    "the sandboxed config still names the full plan");
+  assert.equal(carried.planPath, SANDBOX_PATHS.plan);
+  assert.equal(carried.repoDir, SANDBOX_PATHS.work);
+
+  // THE ARGV. A relative path is refused rather than silently bound somewhere odd.
+  assert.throws(() => sandboxArgv({ checkoutDir: "relative" }), /absolute/,
+    "a relative mount source was accepted");
+
+  // THE LIVE NAMESPACE. Everything above is arithmetic until the kernel agrees.
+  const root = mkdtempSync(join(tmpdir(), "pi-fold-sandbox-gate-"));
+  try {
+    for (const dir of ["work", "session", "run", "harness", "home", "identity", "agent",
+      "scratch"]) {
+      mkdirSync(join(root, dir));
+    }
+    writeFileSync(join(root, "agent", "auth.json"), "{}\n");
+    writeFileSync(join(root, "work", "README"), "pinned checkout\n");
+    writeFileSync(join(root, "harness", "protocol.txt"), "the experiment's own source\n");
+    // The deleter is exercised from INSIDE the harness copy, which is where the
+    // worker imports it from: the module has to survive its own deletion.
+    writeFileSync(join(root, "harness", "pi_context_sandbox.mjs"),
+      source("scripts/lib/pi_context_sandbox.mjs"));
+    writeFileSync(join(root, "harness", "config.json"), "{}\n");
+    writeFileSync(join(root, "harness", "plan.json"), "{}\n");
+    writeFileSync(join(root, "identity", "passwd"),
+      `agent:x:${process.getuid()}:${process.getgid()}:agent:${SANDBOX_PATHS.home}:/bin/sh\n`);
+    writeFileSync(join(root, "identity", "group"), `agent:x:${process.getgid()}:\n`);
+    const argv = sandboxArgv({
+      checkoutDir: join(root, "work"), sessionDir: join(root, "session"),
+      runDir: join(root, "run"), harnessDir: join(root, "harness"),
+      piRoot: PI_INSTALL_ROOT, nodeExecutable: process.execPath,
+      identityDir: join(root, "identity"),
+      agentDir: join(root, "agent"), authPath: join(root, "agent", "auth.json"),
+      scratchDir: join(root, "scratch"),
+      homeDir: join(root, "home"),
+    });
+    // The PID namespace is the part that matters. A fresh /proc alone leaves every
+    // host process visible, and a probe from inside read neighbouring cmdlines
+    // naming real paths under the user's home: the 2026-08-14 leak chain arriving
+    // through a neighbour instead of through self.
+    assert(argv.includes("--unshare-all"), "the sandbox does not unshare the PID namespace");
+    const probe = argv.slice(0, -2);
+    probe.push("--input-type=module", "-e", `
+      import { existsSync, writeFileSync, readdirSync } from "node:fs";
+      const report = {
+        home: existsSync(${JSON.stringify(process.env.HOME ?? "/home")}),
+        canon: existsSync(${JSON.stringify(join(PROJECT, ".canon"))}),
+        project: existsSync(${JSON.stringify(PROJECT)}),
+        campaign: existsSync(${JSON.stringify(root)}),
+        pids: readdirSync("/proc").filter((entry) => /^[0-9]+$/.test(entry)).length,
+        checkout: existsSync("/work/README"),
+        harness: existsSync("/opt/harness/protocol.txt"),
+        runHistory: existsSync(${JSON.stringify(join(SANDBOX_PATHS.agent, "run-history.jsonl"))}),
+        otherExtensions: existsSync(${JSON.stringify(join(SANDBOX_PATHS.agent, "extensions"))}),
+      };
+      try { writeFileSync("/work/probe", "x"); report.checkoutWritable = true; }
+      catch { report.checkoutWritable = false; }
+      try { writeFileSync("/session/probe", "x"); report.sessionWritable = true; }
+      catch { report.sessionWritable = false; }
+      // The model's two writable places. Both must survive the namespace, because
+      // a note it can write and we cannot read is a recovery channel we cannot see.
+      try { writeFileSync("/tmp/notes.md", "answer: lib/vdns/doh.c"); report.scratchWritable = true; }
+      catch { report.scratchWritable = false; }
+      try { writeFileSync(${JSON.stringify(join(SANDBOX_PATHS.home, "notes.md"))}, "answer: lib/vtls/gtls.c"); report.homeWritable = true; }
+      catch { report.homeWritable = false; }
+      const { deleteHarnessSource, harnessSourceRemains } = await import(
+        "/opt/harness/pi_context_sandbox.mjs");
+      deleteHarnessSource();
+      report.harnessAfterDelete = harnessSourceRemains();
+      console.log(JSON.stringify(report));
+    `);
+    const run = spawnSync(probe[0], probe.slice(1), { encoding: "utf8" });
+    // Name the missing-binary case explicitly. spawnSync leaves stderr undefined
+    // when the executable itself is absent, and "did not start: undefined" sent one
+    // CI run looking in the wrong place.
+    assert(!run.error, `the sandbox could not be launched at all: ${run.error?.message}. ` +
+      "bubblewrap and unprivileged user namespaces are required to run this gate");
+    assert.equal(run.status, 0, `the sandbox did not start: ${run.stderr?.slice(0, 400)}`);
+    const seen = JSON.parse(run.stdout.trim().split("\n").pop());
+    // ABSENT, not denied. `.canon` alone is 219 files whose journal quotes seeded
+    // values and states the whole design; the campaign directory holds the plan.
+    assert.equal(seen.home, false, "the user's home is inside the namespace");
+    assert.equal(seen.canon, false, "the project's own memory is inside the namespace");
+    assert.equal(seen.project, false, "the pi-fold checkout is inside the namespace");
+    assert.equal(seen.campaign, false, "the campaign directory is inside the namespace");
+    assert(seen.pids <= 8, `the namespace shows ${seen.pids} processes, so host cmdlines are readable`);
+    // And the run itself still works.
+    assert.equal(seen.checkout, true, "the pinned checkout is not readable");
+    assert.equal(seen.checkoutWritable, false, "the graded checkout is writable");
+    assert.equal(seen.sessionWritable, true, "the session directory is not writable");
+    // NOTHING THE MODEL WRITES MAY BE INVISIBLE (Shane 2026-08-21: "we just need to
+    // be sure they cannot cheat"). /tmp was a tmpfs, so a note written there died
+    // with the namespace and no adjudication could ever see it. It is a real bind
+    // now, and both writable places are enumerated after the run.
+    assert.equal(seen.scratchWritable, true, "the model has no scratch, so bash has nowhere to work");
+    assert.equal(seen.homeWritable, true, "the model's home is not writable");
+    const written = modelWrittenFiles(join(root, "home"), join(root, "scratch"));
+    assert.deepEqual(written.map((file) => file.path).sort(),
+      [`${SANDBOX_PATHS.home}/notes.md`, `${SANDBOX_PATHS.scratch}/notes.md`],
+      "a file the model wrote inside the namespace did not survive for adjudication");
+    assert(written.every((file) => /^[0-9a-f]{64}$/.test(file.sha256) && file.bytes > 0),
+      "a captured model write carries no usable identity");
+    // The harness source is a test-disclosure surface: it names the arms, the end
+    // block and the ledger. It is copied in because node must import it, and it
+    // goes once every module is resident, before the model takes a turn.
+    // Pi's real agent directory holds the user's own session history and the
+    // interactive deployment. The namespace gets a rebuilt one instead.
+    assert.equal(seen.runHistory, false, "the user's own run history is inside the namespace");
+    assert.equal(seen.otherExtensions, false, "the interactive extension tree is inside the namespace");
+    assert.equal(seen.harness, true, "the harness never reached the namespace, so the delete proves nothing");
+    assert.deepEqual(seen.harnessAfterDelete, [], "the harness source survived its own deletion");
+    // The config rides inside that copy, which is what lets it carry the exam text
+    // and the ledger geometry at all: both stop existing before the first turn.
+    assert(SANDBOX_PATHS.config.startsWith(`${SANDBOX_PATHS.harness}/`) &&
+      SANDBOX_PATHS.plan.startsWith(`${SANDBOX_PATHS.harness}/`),
+    "the config or plan outlives the harness deletion");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  checks.theSandboxIsTheBoundaryRatherThanTheToolList = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 74 - a delivered stage does not survive its own delivery.
+//
+// The supervisor used to render each stage and drop it at ipc/responses/stage-NN.json, and
+// those files sat there for the whole run. In sealed native rep 5, 27 of the 64 carried
+// seeded ledger values, so an arm that lost a stage to compaction could re-read that stage
+// verbatim off disk. That is a recovery channel the harness invented: neither compaction nor
+// folding puts it there, and with the tool surface restored to stock Pi the model has `grep`
+// to find it with.
+//
+// It was closed by consuming the file on read, which worked and left the channel one missed
+// truncate away from reopening. It is closed at the root as of 2026-08-25: a delivered stage
+// is a line on a socket and is never written down anywhere the model can reach. What the
+// deletion must not cost is the proof that the stage was delivered, and that proof was never
+// in the file: it is in pace.jsonl, on the supervisor's side.
+// ---------------------------------------------------------------------------
+{
+  const extension = source("scripts/pi_context_experiment_extension.mjs");
+  // NOT WRITTEN DOWN AT ALL. The old assertions pinned the truncate that emptied the response
+  // file; there is no response file, so what is pinned is the absence of one. `responsePath`
+  // is the name the whole mechanism hung off, and the delivery arriving as a return value
+  // from the socket is what replaced it.
+  assert(!/responsePath/.test(extension),
+    "the stage response is a path again, so it is a file the model can find");
+  assert(/const response = await requestStage\(request, config\.watchdogMs\);/.test(extension),
+    "the stage response no longer arrives on the delivery channel");
+  const worker74 = source("scripts/run_pi_context_experiment_worker.mjs");
+  assert(/const stagesDelivered = \(\) => stagesDeliveredCount;/.test(worker74),
+    "the delivery counter is inferred again rather than being what the worker itself did");
+  const runner = source("scripts/run_pi_context_experiment.mjs");
+  assert(!/ipc\//.test(runner),
+    "the supervisor writes the stage channel to a directory again");
+  assert(/delivery\.write\(`\$\{JSON\.stringify\(response\)\}/.test(runner),
+    "the supervisor no longer answers on the delivery socket");
+
+  // THE EVIDENCE THE DELETION MUST NOT COST. What the file held has to stay
+  // provable without the file, and it is: the supervisor stamps the response's own
+  // identity into the pace record it writes on its own side of the boundary. The
+  // block is located first, so a rename fails here rather than passing on a regex
+  // that matched nothing.
+  const paceBlock = /const paceIdentity = \{([\s\S]*?)\n      \};/.exec(runner);
+  assert(paceBlock, "the sweep cannot read the pace record, so it is scanning nothing");
+  for (const field of ["responseSha256", "contentSha256", "payloadSha256"]) {
+    // Shorthand or explicit, both are the field being present.
+    assert(new RegExp(`\\b${field}\\s*[,:]`).test(paceBlock[1]),
+      `the pace record cannot identify the deleted response: no ${field}`);
+  }
+  assert(!/\bcontent\s*[,:]\s*(?!Sha)/.test(paceBlock[1]),
+    "the pace record carries the stage text itself, which is the file we just deleted");
+  checks.aDeliveredStageDoesNotSurviveItsOwnDelivery = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 75 - the transpile cache never lands where the model can read it.
+//
+// The harness deletes its own source before the model takes a turn, which is what
+// lets the restored tool surface be safe. jiti defeats that quietly: it writes
+// compiled .ts beside the project's node_modules, and inside the namespace that
+// path does not exist, so it falls back to TMPDIR, which IS the model's scratch.
+//
+// Found by auditing the first full pair at stage 24 of 64, which was killed for it:
+// scripts-pi_context_experiment_extension.<hash>.mjs sat in /tmp/jiti naming pifold
+// ten times, nativefence three and native compaction twice. It carried no seeded
+// value, so this is test-awareness rather than an answer leak, but it is exactly the
+// surface gate 62 denies, and it survived the deletion because jiti had already
+// copied it somewhere the deletion does not reach.
+// ---------------------------------------------------------------------------
+{
+  const worker75 = source("scripts/run_pi_context_experiment_worker.mjs");
+  const options = /createJiti\(import\.meta\.url, \{([\s\S]*?)\n\}\);/.exec(worker75);
+  assert(options, "the sweep cannot read the worker's jiti options, so it is scanning nothing");
+  assert(/\bfsCache:\s*false\b/.test(options[1]),
+    "the worker lets jiti write a transpile cache the model could read");
+
+  // DRIVEN, not asserted. The flag is only worth anything if it actually suppresses
+  // the write, and the same fixture proves the write happens without it, so a jiti
+  // that stopped caching altogether cannot make this pass for the wrong reason.
+  const cacheRoot = mkdtempSync(join(tmpdir(), "pi-fold-jiti-gate-"));
+  try {
+    const { createJiti: make } = await import(
+      pathToFileURL(join(PI_INSTALL_ROOT, "node_modules", "jiti", "lib", "jiti.mjs")).href);
+    const alias = {
+      "@earendil-works/pi-coding-agent": join(PI_INSTALL_ROOT, "dist", "index.js"),
+      typebox: join(PI_INSTALL_ROOT, "node_modules", "typebox", "build", "index.mjs"),
+    };
+    // A throwaway module, because the verifier has already imported the real
+    // extensions through jiti by this point and an in-process hit would transpile
+    // nothing, making the positive case fail for a reason that is not the cache.
+    const target = join(cacheRoot, "fixture.ts");
+    writeFileSync(target, "export const fixture: number = 1;\n");
+    const cached = join(cacheRoot, "cached");
+    mkdirSync(cached);
+    await make(pathToFileURL(join(PROJECT, "scripts", "x.mjs")).href,
+      { alias, fsCache: cached }).import(target);
+    const wrote = existsSync(cached) ? readdirSync(cached).length : 0;
+    assert(wrote > 0, "jiti wrote no cache even when told to, so the negative case proves nothing");
+    const suppressed = join(cacheRoot, "suppressed");
+    mkdirSync(suppressed);
+    await make(pathToFileURL(join(PROJECT, "scripts", "y.mjs")).href,
+      { alias, fsCache: false }).import(target);
+    assert.equal(readdirSync(suppressed).length, 0,
+      "fsCache false still left a compiled copy on disk");
+  } finally {
+    rmSync(cacheRoot, { recursive: true, force: true });
+  }
+  checks.theTranspileCacheNeverLandsWhereTheModelCanRead = true;
+}
+
+// ---------------------------------------------------------------------------
+// Gate 76 (2026-08-21): the session file a sandboxed run reports is a path inside
+// the namespace, and every reader on this side has to translate it.
+//
+// The supervisor already did, at readiness, because it needs the host inode to
+// tail the session while the run is live. The adjudicator read `worker.sessionFile`
+// straight out of `worker-report.json` and asked the host for `/session/<name>`,
+// which exists nowhere, so BOTH arms of the first sandboxed pair finished 64 of 64
+// stages with ok true and then failed adjudication on "Session evidence is missing".
+// The runs were fine. The reader was wrong, and it was wrong months-later rather
+// than at run time, which is the failure mode a sealed corpus cannot afford.
+//
+// One definition, driven as a function. A second copy in the adjudicator would
+// pass this gate today and drift the first time the layout moves, so the gate also
+// pins that neither reader translates on its own.
+// ---------------------------------------------------------------------------
+{
+  // Assembled, never written out: package gate 86 refuses an operator home path in
+  // any tracked file, and this fixture needs an absolute run directory to be real.
+  const runDir = ["", "home", "operator", "pi-fold-runs", "sol-x", "pifold-rep1"].join("/");
+  const inside = `${SANDBOX_PATHS.session}/2026-08-21T00-00-00.jsonl`;
+  assert.equal(hostSessionFile(runDir, inside),
+    join(runDir, "session", "2026-08-21T00-00-00.jsonl"),
+    "a namespace session path did not resolve to its host inode");
+
+  // Pre-sandbox runs reported a host path already and must read byte-identically,
+  // which is what keeps every sealed campaign adjudicable from this checkout.
+  const legacy = join(runDir, "session", "2026-08-12T00-00-00.jsonl");
+  assert.equal(hostSessionFile(runDir, legacy), legacy,
+    "translation touched a path that was already on the host");
+  assert.equal(hostSessionFile(runDir, undefined), undefined,
+    "a missing session path stopped being missing, which hides the assertion that catches it");
+  // A path that merely CONTAINS the namespace root is not one, or a host run
+  // directory named /session-archive would be rewritten out from under itself.
+  const lookalike = "/session-archive/2026-08-12T00-00-00.jsonl";
+  assert.equal(hostSessionFile(runDir, lookalike), lookalike,
+    "a host path sharing the namespace prefix was rewritten");
+
+  // EVERY reader, one definition. Three of them exist and all three were wrong in
+  // their own way: the adjudicator asked the host for a namespace path, and the
+  // carriage sweep guessed the session by scanning the run directory for a .jsonl
+  // outside a hardcoded harness set, which read stop-the-world.jsonl as the native
+  // arm's session and reported no-answer-found for every row WITHOUT failing.
+  // A reader that fails is a bug; a reader that answers wrong is a corrupt result,
+  // so the gate pins the naming rather than the scan.
+  for (const file of ["scripts/adjudicate_pi_context_experiment.mjs",
+                      "scripts/run_pi_context_experiment.mjs",
+                      "scripts/attribute_probe_carriage.mjs"]) {
+    const text = source(file);
+    assert(/hostSessionFile\(/.test(text),
+      `${file} does not resolve the session path through the shared reading`);
+    assert(!/\bjoin\(\s*sessionDir\s*,\s*basename\(/.test(text),
+      `${file} kept its own copy of the translation, which is what drifts`);
+    assert(!/readdirSync\([^)]*\)[\s\S]{0,120}endsWith\("\.jsonl"\)/.test(text),
+      `${file} still guesses the session file by scanning, which reads the wrong one silently`);
+  }
+  checks.aSandboxedSessionPathResolvesForEveryReader = true;
+}
+
+assert.deepEqual([...EXPERIMENT_GUIDANCE_PROFILES], ["pressure", "curation", "minimal"]);
+assert.deepEqual([...EXPERIMENT_MODES], ["smoke", "full"]);
+assert(plan, "stage plan fixture did not survive gate 4");
+
+const report = {
+  ok: true,
+  acceptance: false,
+  version: EXPERIMENT_PROTOCOL_VERSION,
+  arms: [...EXPERIMENT_ARMS],
+  modes: Object.fromEntries(EXPERIMENT_MODES.map((mode) => [mode, EXPERIMENT_MODE_PLANS[mode]])),
+  defaultRepo: EXPERIMENT_DEFAULT_REPO,
+  checks,
+};
+assert(Object.values(checks).every((value) => value === true), "a gate did not report");
+process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
+// ---------------------------------------------------------------------------
+// GATE 103 IS RETIRED (2026-08-25). It pinned the fence abort's local zero-usage marker
+// being abandoned BY NAME rather than orphaned, one per crossing, after nativefence rep 2 of
+// sol-20260823-live died on its first crossing with the fence itself having worked. Nothing
+// aborts a turn from outside any more: Pi compacts at its own boundary, where no request is
+// in flight to strand. Its number stays spent.
+
+// GATE 106 IS RETIRED (2026-08-25). It pinned that the fence proof survived a stale ctx:
+// a crossing below Pi's own trigger made our manual compact() perform the compaction itself,
+// the session was replaced under the captured ctx, and the proof-read hit Pi's stale-ctx
+// guard and killed the worker at stage 9 (nativefence rep 8 at --fence-share 0.50). There is
+// no manual compact to prove. Its number stays spent.
+
+// GATE 107 IS RETIRED (2026-08-25). It pinned that a crossing's outcome was AWAITED rather
+// than assumed: the manual compact() a below-trigger crossing fired was detached from the
+// operation the worker awaited, so its abort resolved the prompt promise and the worker's
+// own teardown then CANCELLED the compaction (nativefence rep 9 of sol-20260823-live
+// recorded the race in four milliseconds). No crossing, no race. Its number stays spent.
+
+
+// ---------------------------------------------------------------------------
+// GATE 108 - the stale-artifact geometry, and the re-injection it exists to bound.
+//
+// The v5 graded instrument (scripts/lib/pi_context_artifacts.mjs) replaces the seeded
+// ledger because on 2026-08-25 the sealed corpus showed a native run's table score IS its
+// compaction summary's table content, as a SET identity: nativefence rep4 carried rows
+// {1..7} and scored exactly {1..7}. The ledger's shape is what the ratchet transcribes,
+// so 26 of 30 points measured transcription rather than recall.
+//
+// The replacement material is stage membership, measured on the same run's final summary
+// at 70 of 263 files (26.6 percent) against the ledger's 16 of 16, and, decisively, with
+// 14 DROPS AFTER CAPTURE against the ledger's 0: the PRESERVE rule keeps key-value content
+// permanently and re-compresses incidental work description out of existence, so the
+// ratchet law is shape-specific and this shape escapes it.
+//
+// But an artifact shows the model most of the truth in order to ask which parts are wrong,
+// so every ask RE-INJECTS its own subjects. Three bounds make that survivable and this
+// gate is all three: windows are disjoint, a non-empty held-out set is touched by no ask,
+// and no subject is asked about before the session has reached it. The fourth assertion is
+// the one the generator itself failed on its first real plan: a seeded shuffle leaves fixed
+// points, and a field planted with its own truth scores a correction for a model that never
+// touched the file. The gate drives the pre-fix shuffle and proves it is refused.
+// ---------------------------------------------------------------------------
+{
+  const artifacts = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+  const seeds = JSON.parse(readFileSync(join(PROJECT, "docs", "fold_vs_compaction", "hidden-mass-seeds.json"), "utf8"));
+
+  // A plan shaped like the real one: files on every stage but the probe ordinals, which
+  // carry none and must therefore never be anyone's subject.
+  const stages = [];
+  for (let ordinal = 1; ordinal <= 64; ordinal += 1) {
+    const probe = ordinal % 16 === 0;
+    stages.push({
+      ordinal,
+      kind: probe ? "probe" : "read",
+      files: probe ? [] : [
+        { path: `lib/f${ordinal}a.c`, lines: 10 },
+        { path: `lib/f${ordinal}b.c`, lines: 10 },
+      ],
+    });
+  }
+  const chains = [{
+    id: "trace-a",
+    links: [
+      { index: 1, stage: 3, hop: "INC", input: "lib/f3a.c", expectedAnswer: "lib/f5a.c" },
+      { index: 2, stage: 9, hop: "INC", input: "lib/f9a.c", expectedAnswer: "lib/f11a.c" },
+      { index: 3, stage: 21, hop: "INC", input: "lib/f21a.c", expectedAnswer: "lib/f23a.c" },
+      { index: 4, stage: 33, hop: "INC", input: "lib/f33a.c", expectedAnswer: "lib/f35a.c" },
+      { index: 5, stage: 45, hop: "SOF", input: "lib/f45a.c", expectedAnswer: 1 },
+    ],
+  }];
+  const schemas = [...artifacts.ARTIFACT_SCHEMAS];
+  const inputs = {
+    stages, chains, contentSeed: seeds.contentSeed, querySeed: seeds.querySeed, fieldCount: 5,
+  };
+  const built = artifacts.buildStaleArtifacts({ ...inputs, schemas });
+  const verdict = artifacts.validateStaleArtifacts({ ...inputs, artifacts: built });
+
+  // Determinism: the same seeds regenerate the same asks byte for byte, which is what lets
+  // the validator refuse drift at all (gate 70's discipline, one instrument over).
+  assert.equal(
+    artifacts.staleArtifactsDigest(built),
+    artifacts.staleArtifactsDigest(artifacts.buildStaleArtifacts({ ...inputs, schemas })),
+    "the same seeds do not regenerate the same stale artifacts");
+  // AND THE BUILD IS A FUNCTION OF THE SCHEMA SET, NOT OF ITS ORDER. The validator
+  // regenerates from the BUILT asks' own schema list, which is already shuffled, so a
+  // build that shuffled whatever order it was handed applied the shuffle twice and refused
+  // every full-mode plan as drift against itself.
+  for (const permuted of [[...schemas].reverse(), [...schemas].sort()]) {
+    assert.equal(
+      artifacts.staleArtifactsDigest(artifacts.buildStaleArtifacts({ ...inputs, schemas: permuted })),
+      artifacts.staleArtifactsDigest(built),
+      "the schema list's ORDER changes the asks, so validation refuses a plan against itself");
+  }
+
+  // Disjoint windows, and every subject already past when it is asked about.
+  const seen = new Set();
+  for (const ask of built) {
+    for (const ordinal of ask.window) {
+      assert(!seen.has(ordinal), `stage ${ordinal} is a subject of two asks, so the second scores re-injection`);
+      seen.add(ordinal);
+      assert(ordinal < ask.askStage, `ask ${ask.id} asks about stage ${ordinal} before the session reaches it`);
+      // AND THE ASK LEAVES ROOM FOR ITS OWN COLLECTION, which happens on the NEXT fetch.
+      // A smoke plan staged an ask at stage 8 of 8 and the run config would have refused
+      // it at startup, so the geometry has to know what the runtime knows.
+      assert(ask.askStage < stages.length,
+        `ask ${ask.id} fires at the last stage, where nothing will ever collect it`);
+      const stage = stages.find((candidate) => candidate.ordinal === ordinal);
+      assert(stage.files.length > 0, `stage ${ordinal} delivered no files and has no membership to remember`);
+    }
+  }
+
+  // The held-out set is why the end block can still measure anything.
+  assert(verdict.heldOut.length > 0, "no stages are held out, so every end-block subject was re-injected");
+  for (const ordinal of verdict.heldOut) {
+    assert(!seen.has(ordinal), `held-out stage ${ordinal} is also an artifact subject`);
+  }
+  // Held out ACROSS the run, not as a suffix: a suffix hold-out would make every end-block
+  // subject recent and measure the tail of the window instead of the whole span.
+  assert(verdict.heldOut[0] < 16 && verdict.heldOut.at(-1) > 48,
+    "the held-out subjects do not span the run, so the end block only asks about recent material");
+
+  // Schemas and paths rotate, so the ask never becomes a ritual that teaches what to hoard.
+  assert.equal(new Set(built.map((ask) => ask.schema)).size, built.length, "a schema is asked twice");
+  // THE RELATION HOLD-OUT (Shane, 2026-08-25): "they will be primed to capture something
+  // once asked about a type of thing". Rotating schemas is not enough; asking a TYPE once
+  // teaches that the type gets asked about, so no two asks may share a relation and none
+  // may share the end block's.
+  assert.equal(new Set(built.map((ask) => ask.relation)).size, built.length,
+    "two asks share a relation, so the second scores the first's priming");
+  const endRelation = artifacts.artifactSchemaRelation(artifacts.ARTIFACT_END_BLOCK_SCHEMA).relation;
+  assert(built.every((ask) => ask.relation !== endRelation),
+    "an in-run ask uses the end block's relation, so the end block scores that ask's priming");
+  assert(!artifacts.ARTIFACT_SCHEMAS.includes(artifacts.ARTIFACT_END_BLOCK_SCHEMA),
+    "the end block's schema is also an in-run schema");
+  assert.equal(new Set(built.map((ask) => ask.path)).size, built.length, "a path is used twice");
+
+  // THE CORRECTION IS NEVER READABLE OFF THE NOTE IT APPEARS IN. Every file is delivered
+  // exactly once, so a substituted path taken from a pass the same note lists would show
+  // one file under two headings: a visible inconsistency a careful reader resolves without
+  // remembering anything, which would then score as recall. Measured at 1 of 6 fields
+  // before the wrong-pick pool was narrowed to paths outside the note.
+  for (const ask of built.filter((candidate) => candidate.schema === "manifest")) {
+    const note = artifacts.renderStaleArtifact(ask);
+    for (const field of ask.fields) {
+      for (const missing of field.truth.filter((path) => !field.stale.includes(path))) {
+        assert(!note.includes(missing),
+          `${ask.id} field ${field.key} can be corrected by reading the note it appears in`);
+      }
+      for (const planted of field.stale.filter((path) => !field.truth.includes(path))) {
+        assert(!ask.fields.some((other) => other !== field && other.truth.includes(planted)),
+          `${ask.id} plants ${planted} under one heading while listing it truthfully under another`);
+      }
+    }
+  }
+
+  // NO FIELD IS PLANTED WITH ITS OWN TRUTH. This is the defect the validator caught on the
+  // first real plan (af-04 entry-04): a plain shuffle leaves fixed points, and a model that
+  // never opened the file would then score a correction for that entry.
+  for (const ask of built) {
+    for (const field of ask.fields) {
+      assert.notEqual(JSON.stringify(field.truth), JSON.stringify(field.stale),
+        `${ask.id} field ${field.key} is planted with its own truth`);
+    }
+  }
+  // The derangement primitive itself, driven directly, including the seed that motivated it.
+  const items = [1, 2, 3, 4, 5, 6];
+  for (const seed of ["a", "b", "c", "d", "e", "f", "g", "h"]) {
+    const deranged = artifacts.seededDerangement(items, seed);
+    assert.equal(new Set(deranged).size, items.length, "the derangement lost or duplicated an entry");
+    for (const [index, value] of deranged.entries()) {
+      assert.notEqual(value, items[index], `the derangement left ${value} in its own position under seed ${seed}`);
+    }
+  }
+  // And the pre-fix behaviour is genuinely different: at least one seed leaves a fixed point
+  // under a plain shuffle, so the gate is not asserting a property the old code already had.
+  const shuffleFixesPoint = ["a", "b", "c", "d", "e", "f", "g", "h"].some((seed) =>
+    seededShuffle(items, seed).some((value, index) => value === items[index]));
+  assert(shuffleFixesPoint, "a plain shuffle never leaves a fixed point, so the derangement is unmotivated");
+
+  checks.staleArtifactGeometryBoundsReinjection = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 109 - four outcomes per field, never two, and recall never pooled with re-derivation.
+//
+// The probe format the artifacts replace could only say right or wrong, so "did not
+// remember" and "made it up" landed in one bucket. A planted WRONG value separates them:
+// a field left as planted is no recall, a field changed to something that is neither truth
+// nor plant is confabulation, and an explicit unverified marker is an abstention rather
+// than a failure, because declining to change a value you are unsure of is honest.
+//
+// The crossref schema is the control: a model can re-open the file and resolve the include
+// itself, so its fields carry rederivable:true and a run that aces crossref while failing
+// manifest is telling us it worked rather than remembered. Pooling the two would report
+// that as recall, so the grader keeps the flag on every row.
+// ---------------------------------------------------------------------------
+{
+  const artifacts = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+  const ask = {
+    id: "af-01",
+    schema: "manifest",
+    rederivable: false,
+    fields: [
+      { key: "a", truth: ["x.c"], stale: ["y.c"], rederivable: false },
+      { key: "b", truth: ["p.c"], stale: ["q.c"], rederivable: false },
+      { key: "c", truth: ["m.c"], stale: ["n.c"], rederivable: false },
+      { key: "d", truth: ["s.c"], stale: ["t.c"], rederivable: false },
+      { key: "e", truth: ["u.c"], stale: ["v.c"], rederivable: false },
+    ],
+  };
+  const graded = artifacts.gradeStaleArtifact({
+    ask,
+    returned: {
+      a: ["x.c"],                        // corrected
+      b: ["q.c"],                        // left as planted
+      c: ["zzz.c"],                      // neither: confabulated
+      d: artifacts.ARTIFACT_UNVERIFIED,  // abstained
+      // e omitted entirely
+    },
+  });
+  assert.equal(graded.corrected, 1, "a restored value is not counted as a correction");
+  assert.equal(graded.stale, 1, "a value left as planted is not counted as stale");
+  assert.equal(graded.confabulated, 1, "a value that is neither truth nor plant is not counted as confabulation");
+  assert.equal(graded.abstained, 1, "an explicit unverified marker is not counted as an abstention");
+  assert.equal(graded.missing, 1, "a field the model never wrote is not counted as missing");
+  assert.equal(graded.corrected + graded.stale + graded.confabulated + graded.abstained + graded.missing,
+    graded.fields, "the outcomes do not partition the fields");
+
+  // ABSTENTION MUST BE EXPRESSIBLE IN EVERY SCHEMA. The first end-to-end run showed the
+  // cost of assuming it is always a bare string: a manifest field holds a LIST and a
+  // worklog field holds a POSITION, neither of which has an obvious place for a marker, so
+  // an honest "I do not remember this pass" landed in the confabulation bucket beside a
+  // fabricated one. A single-element list holding only the marker counts, and the worklog
+  // parser lifts a marker annotated onto a line.
+  assert.equal(artifacts.isAbstention(["unverified"]), true,
+    "a list-valued field cannot express an abstention");
+  assert.equal(artifacts.isAbstention(["unverified", "b.c"]), false,
+    "a marker beside real values is read as an abstention");
+  assert.equal(artifacts.isAbstention(["a.c"]), false, "an ordinary one-file list is read as an abstention");
+  assert.equal(artifacts.isAbstention(3), false, "a number is read as an abstention");
+  const marked = artifacts.parseStaleArtifact({
+    schema: "worklog", text: "# Worklog\n\n1. lib/a.c\n2. lib/b.c (unverified)\n3. lib/c.c\n",
+  });
+  assert.equal(marked["lib/b.c"], artifacts.ARTIFACT_UNVERIFIED,
+    "a worklog entry the model could not place is scored as a position rather than an abstention");
+  assert.equal(marked["lib/a.c"], 1, "annotating one entry shifted another's position");
+  assert.equal(marked["lib/c.c"], 3, "a marked entry stopped occupying its own position");
+
+  // Abstention is case- and space-insensitive, because the marker is written by a model.
+  assert.equal(artifacts.gradeStaleArtifact({
+    ask: { ...ask, fields: [ask.fields[0]] }, returned: { a: "  UNVERIFIED " },
+  }).abstained, 1, "an abstention written with different case or spacing is not honoured");
+
+  // Confabulation is NOT abstention: a model that writes prose instead of a value has made
+  // something up, and reading that as an honest abstention would flatter every wrong answer.
+  assert.equal(artifacts.gradeStaleArtifact({
+    ask: { ...ask, fields: [ask.fields[0]] }, returned: { a: "I think it was probably x.c" },
+  }).confabulated, 1, "free prose is read as something other than confabulation");
+
+  // The re-derivable flag survives grading, per row and per ask.
+  const control = artifacts.gradeStaleArtifact({
+    ask: { id: "af-02", schema: "crossref", rederivable: true,
+      fields: [{ key: "f.c", truth: "g.h", stale: "z.h", rederivable: true }] },
+    returned: { "f.c": "g.h" },
+  });
+  assert.equal(control.rederivable, true, "the control schema loses its flag at grading");
+  assert(control.rows.every((row) => row.rederivable === true),
+    "a re-derivable field is not marked as such on its own row, so it can be pooled with recall");
+  assert(graded.rows.every((row) => row.rederivable === false),
+    "a recall field is marked re-derivable");
+
+  // THE END BLOCK GRADES AS PRECISION, not as an exact set. Passes run from two files to
+  // nine, so an exact-set answer would be near-impossible on the wide ones and nearly free
+  // on the narrow ones, and the score would track pass width rather than memory.
+  const question = { id: "eb-01", wanted: 2, truth: ["a.c", "b.c", "c.c", "d.c", "e.c"] };
+  assert.equal(artifacts.gradeAdjacency({ question, named: ["a.c", "c.c"] }).precision, 1,
+    "two files that both belonged to the neighbour do not score a full precision");
+  assert.equal(artifacts.gradeAdjacency({ question, named: ["a.c", "zz.c"] }).precision, 0.5,
+    "one right and one wrong is not scored as half");
+  assert.equal(artifacts.gradeAdjacency({ question, named: ["yy.c", "zz.c"] }).outcome, "wrong",
+    "two wrong names are not scored wrong");
+  // A wide pass and a narrow one are the same difficulty, which is the whole point.
+  assert.equal(
+    artifacts.gradeAdjacency({ question: { ...question, truth: ["a.c", "b.c"] }, named: ["a.c", "b.c"] }).precision,
+    artifacts.gradeAdjacency({ question, named: ["a.c", "c.c"] }).precision,
+    "a narrow pass and a wide one do not grade alike, so the score tracks pass width");
+  // Volume is not rewarded: naming ten to make two stick is truncated to the ask.
+  const flooded = artifacts.gradeAdjacency({
+    question, named: ["a.c", "b.c", "q.c", "r.c", "s.c", "t.c", "u.c"],
+  });
+  assert.equal(flooded.named, 2, "an over-long answer is not truncated to what was asked for");
+  // Naming nothing is an abstention, never a zero: declining to guess is honest, and the
+  // instrument must be able to tell it from guessing wrong.
+  const silent = artifacts.gradeAdjacency({ question, named: [] });
+  assert.equal(silent.outcome, "abstained", "naming nothing is not read as an abstention");
+  assert.equal(silent.precision, null, "an abstention is scored as a zero rather than held out");
+
+  checks.staleArtifactGradingSeparatesRecallFromConfabulation = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 110 - the new surface does not announce itself.
+//
+// Gate 62 scans the system, workload, resume and stage-payload surfaces. The stale
+// artifacts are a FIFTH instruction surface, delivered to the model in its own words, and
+// they were written after gate 62's scan was fixed, so nothing was watching them. The
+// whole point of the mechanism is that no bespoke tool, question format or probe id
+// announces a test; a request that says "recall" or "you will be asked" gives back
+// everything the de-priming bought.
+// ---------------------------------------------------------------------------
+{
+  const artifacts = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+  for (const schema of artifacts.ARTIFACT_SCHEMAS) {
+    const request = artifacts.artifactRequestText(schema);
+    const leaks = testAwarenessLeaks(request);
+    assert.equal(leaks.length, 0,
+      `the ${schema} request tells the model it is being tested: ${leaks.join(", ")}`);
+    // No protocol furniture either: no stage numbers, no ids, no tool names.
+    assert(!/\bstage\b|\bprobe\b|NEXT_KEY|\bof \d+\b/i.test(request),
+      `the ${schema} request carries protocol furniture`);
+    // The request must read as work, not as an exam, and must OFFER AN OUT: an explicit
+    // instruction to leave or mark what the model cannot vouch for, which is what makes
+    // abstention available to an honest model instead of forcing a guess. Tested as the
+    // shape (leave/mark/say-so paired with a doubt clause) rather than as a word list,
+    // because the extent request offered the out in words the first list did not carry.
+    assert(/\b(?:leave|mark|say so|skip)\b[^.]{0,70}\b(?:alone|as they are|as it is|as-is|cannot|unsure|in place|rather than guess)/i
+      .test(request),
+    `the ${schema} request does not offer the model a way to decline a value it doubts`);
+  }
+  // A POSITIONAL KEY REQUIRES A FIXED ROW SET, or a correct answer grades as invention.
+  //
+  // sol-20260825-push1 had BOTH arms return a byte-identical note that inserted a new first
+  // pass and shifted the rest down: its pass-02 was the true pass-01 (all six files) and its
+  // pass-03 the true pass-02. Recall was perfect; the grade was two confabulations and zero
+  // corrections, because a manifest field is keyed by POSITION IN THE NOTE and every row had
+  // moved. Adding the pass it remembered coming first is arguably the better answer, which
+  // is exactly why the ask has to say which question it is asking.
+  //
+  // Driven off the KEYS rather than the schema name, so a future schema that keys by
+  // position inherits the rule instead of quietly reintroducing the defect. `manifest` keys
+  // `pass-NN`; `worklog` and `extent` key by the pass's leading file path and `crossref` by
+  // its hop input, so all three survive an inserted row and are exempt by construction.
+  const positional = /^pass-\d+$/;
+  const keyStages = [];
+  for (let ordinal = 1; ordinal <= 24; ordinal += 1) {
+    keyStages.push({
+      ordinal,
+      files: [
+        { path: `lib/k${ordinal}a.c`, lines: 10 },
+        { path: `lib/k${ordinal}b.c`, lines: 10 },
+      ],
+    });
+  }
+  const keyChains = [{
+    id: "trace-k",
+    links: [
+      { index: 1, stage: 3, hop: "INC", input: "lib/k3a.c", expectedAnswer: "lib/k5a.c" },
+      { index: 2, stage: 9, hop: "INC", input: "lib/k9a.c", expectedAnswer: "lib/k11a.c" },
+      { index: 3, stage: 15, hop: "INC", input: "lib/k15a.c", expectedAnswer: "lib/k17a.c" },
+    ],
+  }];
+  const keySeeds = JSON.parse(readFileSync(
+    join(PROJECT, "docs", "fold_vs_compaction", "hidden-mass-seeds.json"), "utf8"));
+  const keyed = artifacts.buildStaleArtifacts({
+    stages: keyStages, chains: keyChains,
+    contentSeed: keySeeds.contentSeed, querySeed: keySeeds.querySeed,
+    schemas: [...artifacts.ARTIFACT_SCHEMAS], fieldCount: 3,
+  });
+  let positionalSeen = 0;
+  for (const ask of keyed) {
+    if (!ask.fields.every((field) => positional.test(field.key))) continue;
+    positionalSeen += 1;
+    assert(/there are no others|as they stand|do not add|no more than these/i.test(ask.request),
+      `the ${ask.schema} ask is keyed by position but does not fix its row set, so a model ` +
+      "that adds a remembered row grades as confabulating every row after it");
+  }
+  // Anti-vacuity: at least one schema really is position-keyed, or the loop above proves
+  // nothing. `manifest` is the one; the others key by a path or a hop input and survive an
+  // inserted row by construction.
+  assert.equal(positionalSeen, 1,
+    `expected exactly one position-keyed schema, found ${positionalSeen}`);
+
+  // The four requests are genuinely different wordings, not one sentence with the noun
+  // swapped, so the ask never becomes a recognisable ritual.
+  const requests = artifacts.ARTIFACT_SCHEMAS.map((schema) => artifacts.artifactRequestText(schema));
+  assert.equal(new Set(requests).size, requests.length, "two schemas share a request wording");
+  for (const [index, left] of requests.entries()) {
+    for (const right of requests.slice(index + 1)) {
+      const leftWords = new Set(left.toLowerCase().match(/[a-z]+/g));
+      const rightWords = new Set(right.toLowerCase().match(/[a-z]+/g));
+      const shared = [...leftWords].filter((word) => rightWords.has(word)).length;
+      assert(shared / Math.min(leftWords.size, rightWords.size) < 0.6,
+        "two artifact requests share most of their wording, so the ask reads as a ritual");
+    }
+  }
+  checks.staleArtifactRequestsDoNotAnnounceATest = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 111 - the stale artifact never becomes a memory the harness invented.
+//
+// This is gate 74's lesson one artifact over. `ipc/responses/stage-NN.json` used to
+// survive the whole run; in sealed native rep 5 of sol-20260820-steward, 27 of 64 carried
+// seeded ledger values, so an arm that lost a stage to compaction could grep it back. A
+// file the model POPULATES is worse, because it is a place to write things down on
+// purpose: left standing, a model writes correct values early and re-reads its own file
+// late instead of recalling anything, and both arms score near-perfect while we measure
+// the filesystem.
+//
+// Three bounds, and this gate drives all three: the artifact does not exist before the
+// stage that asks about it, it is truncated the moment the next stage is requested and
+// only after its contents are snapshotted where the model cannot reach, and its mtime is
+// matched to the checkout's own timestamps because a note modified thirty seconds ago is
+// a tell and `stat` is natural analyst behaviour.
+// ---------------------------------------------------------------------------
+{
+  const extensionSource = readFileSync(
+    join(PROJECT, "scripts", "pi_context_experiment_extension.mjs"), "utf8");
+
+  // The consume is TRUNCATE, never unlink, for gate 74's reason: an empty file is not a
+  // recovery channel and is still a receipt, and a path that vanishes is a different tell.
+  const artifactModule = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+
+  // DRIVEN AGAINST A REAL CHECKOUT, not matched against source lines. The bounds live in
+  // scripts/lib/pi_context_artifacts.mjs precisely so this can exercise them.
+  const checkout = mkdtempSync(join(tmpdir(), "pi-fold-artifact-"));
+  try {
+    // A reference file standing in for the worktree's own timestamps, backdated so the
+    // test does not depend on how long ago the temp directory was made.
+    const reference = join(checkout, "README");
+    writeFileSync(reference, "curl\n");
+    const referenceStamp = new Date(Date.now() - 86_400_000 * 30);
+    utimesSync(reference, referenceStamp, referenceStamp);
+
+    const ask = {
+      id: "af-01", schema: "manifest", path: "notes/review-passes.md",
+      text: "# Review passes\n\n## pass-01\n\n- lib/wrong.c\n",
+    };
+    const planted = join(checkout, ask.path);
+
+    // 1. DROP LATE: nothing exists until the stage that asks about it.
+    assert(!existsSync(planted), "the artifact exists before it was planted");
+    const plantRecord = artifactModule.plantArtifact({
+      repoDir: checkout, ask, referencePath: "README",
+    });
+    assert(existsSync(planted), "planting did not create the artifact");
+    assert.equal(readFileSync(planted, "utf8"), ask.text, "the planted artifact is not what was staged");
+
+    // 2. BACKDATE: matched to the checkout's own timestamps, never to now. A note modified
+    //    thirty seconds ago is a tell, and `stat` is natural analyst behaviour.
+    const plantedMtime = statSync(planted).mtimeMs;
+    assert(plantedMtime < referenceStamp.getTime(),
+      "the planted artifact is not older than the checkout it claims to belong to");
+    assert(Date.now() - plantedMtime > 86_400_000,
+      "the planted artifact still carries a fresh mtime");
+    assert(plantRecord.backdatedTo !== null, "the backdate was not reported");
+
+    // A missing reference is a weaker disguise, never a dead run.
+    const undated = artifactModule.plantArtifact({
+      repoDir: checkout, ask: { ...ask, path: "notes/other.md" }, referencePath: "NO-SUCH-FILE",
+    });
+    assert.equal(undated.backdatedTo, null, "a missing reference did not report an absent backdate");
+    assert(existsSync(join(checkout, "notes/other.md")), "a missing reference stopped the plant");
+
+    // 3. CONSUME ON WRITE: the model's edit is snapshotted, THEN the file is emptied.
+    writeFileSync(planted, "# Review passes\n\n## pass-01\n\n- lib/right.c\n");
+    const collected = artifactModule.collectArtifact({ repoDir: checkout, ask });
+    assert(collected.returned.includes("lib/right.c"),
+      "the model's edit was not captured before the file was consumed");
+    assert.equal(collected.untouched, false, "an edited artifact is reported untouched");
+    assert(existsSync(planted), "the artifact was unlinked rather than truncated");
+    assert.equal(readFileSync(planted, "utf8"), "",
+      "the artifact still holds content the model could read back instead of remembering");
+    assert.equal(statSync(planted).size, 0, "the consumed artifact is not empty");
+
+    // An artifact the model never touched is reported as such, which is the "left stale"
+    // outcome the whole instrument rests on.
+    artifactModule.plantArtifact({ repoDir: checkout, ask, referencePath: "README" });
+    assert.equal(artifactModule.collectArtifact({ repoDir: checkout, ask }).untouched, true,
+      "an artifact returned exactly as planted is not reported untouched");
+
+    // A file the model deleted outright is missing, not silently empty: deleting a note is
+    // a different claim from leaving it alone, and grading must be able to tell them apart.
+    artifactModule.plantArtifact({ repoDir: checkout, ask, referencePath: "README" });
+    rmSync(planted);
+    const gone = artifactModule.collectArtifact({ repoDir: checkout, ask });
+    assert.equal(gone.missing, true, "a deleted artifact is not reported missing");
+    assert.equal(gone.returned, null, "a deleted artifact returned content");
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+
+  // The extension COMPOSES those bounds rather than reimplementing them, so the gate above
+  // is testing the code that actually runs.
+  assert(extensionSource.includes('from "./lib/pi_context_artifacts.mjs"'),
+    "the extension does not import the bounds this gate drives");
+  assert(extensionSource.includes("plantArtifact({ repoDir: config.repoDir") &&
+    extensionSource.includes("collectArtifact({ repoDir: config.repoDir"),
+  "the extension does not call the bounds this gate drives");
+  assert(!/utimesSync|mkdirSync/.test(extensionSource),
+    "the extension still reimplements a bound instead of composing it");
+  // The snapshot lands OUTSIDE the checkout, which since 2026-08-25 means outside every
+  // namespace the model has: it is written to an inherited descriptor the supervisor opened
+  // on the host, and the file it lands in is not reachable from inside the run at all.
+  assert(extensionSource.includes('const artifactLog = "stale-artifacts.jsonl"') &&
+    extensionSource.includes("appendRunChannel(artifactLog,"),
+  "the artifact snapshot does not land outside the checkout");
+
+  // COLLECT BEFORE SERVE, PLANT AFTER. Serving first would let the model see the next
+  // stage with the old artifact still on disk; planting before the result is returned
+  // would put the file in the checkout during a turn nobody asked about it.
+  const deliverAt = extensionSource.indexOf("const deliverStage = async () => {");
+  const collectAt = extensionSource.indexOf("collectStaleArtifact();", deliverAt);
+  const waitAt = extensionSource.indexOf("await requestStage(request", deliverAt);
+  const plantAt = extensionSource.indexOf("plantStaleArtifact(stage)", deliverAt);
+  assert(deliverAt >= 0 && collectAt > deliverAt && waitAt > collectAt,
+    "the previous artifact is not collected before the next stage is requested");
+  assert(plantAt > waitAt, "the artifact is planted before its own stage has been served");
+  // THE LAST STAGE'S ARTIFACT IS COLLECTED TOO. Every earlier ask is consumed by the next
+  // stage's delivery; an ask on the final stage has no next delivery, so without this it
+  // would be left populated in the checkout, which is the disk-memory channel these bounds
+  // exist to close. The worker calls it after the loop and before the end block.
+  assert(extensionSource.includes("collectPendingArtifact: () => collectStaleArtifact()"),
+    "the extension exposes no way to collect the last stage's artifact");
+  const worker111 = source("scripts/run_pi_context_experiment_worker.mjs");
+  const loopEnd = worker111.indexOf("experiment.collectPendingArtifact();");
+  const endBlockAt = worker111.indexOf("await session.prompt(config.endBlockPrompt");
+  assert(loopEnd > 0 && endBlockAt > loopEnd,
+    "the last stage's artifact is not collected before the end block is asked");
+
+  // THE RUN CONFIG CONTRACT, driven against the suite's own fixture so it cannot drift
+  // from what the rest of this file already pins.
+  const artifactAsk = {
+    id: "af-01", schema: "manifest", askStage: 4, path: "notes/review-passes.md",
+    request: "please bring this up to date", text: "# Review passes\n", fieldKeys: ["pass-01"],
+  };
+  const withArtifacts = (asks) => ({ ...runConfig, staleArtifacts: asks });
+  validateExperimentRunConfig(withArtifacts([artifactAsk]));
+  // A v4 plan carries none and must keep validating.
+  validateExperimentRunConfig(runConfig);
+  // An ask at the LAST stage is never collected, because collection happens on the next
+  // fetch: its file would survive the run in the checkout.
+  assert.throws(() => validateExperimentRunConfig(withArtifacts([
+    { ...artifactAsk, askStage: EXPERIMENT_MODE_PLANS.smoke.stageCount },
+  ])), /drops at the last stage/);
+  assert.throws(() => validateExperimentRunConfig(withArtifacts([
+    artifactAsk, { ...artifactAsk, id: "af-02", path: "notes/other.md" },
+  ])), /same stage/);
+  assert.throws(() => validateExperimentRunConfig(withArtifacts([
+    artifactAsk, { ...artifactAsk, id: "af-02", askStage: 5 },
+  ])), /same path/);
+  // The path is where the harness writes into the checkout, so it is relative or refused.
+  for (const path of ["/etc/passwd", "../escape.md", "notes/../../escape.md"]) {
+    assert.throws(() => validateExperimentRunConfig(withArtifacts([{ ...artifactAsk, path }])),
+      /relative paths/, `the path ${path} was accepted`);
+  }
+  // A half-declared drop is an artifact that gets planted and never graded.
+  assert.throws(() => validateExperimentRunConfig(withArtifacts([{ ...artifactAsk, fieldKeys: [] }])),
+    /carry them whole/);
+  // AND THE TRUTH NEVER TRAVELS, for the same reason the ledger's never did: grading is
+  // post-hoc and the worker process hosts the model.
+  assert.throws(() => validateExperimentRunConfig(withArtifacts([
+    { ...artifactAsk, fields: [{ key: "pass-01", truth: ["a.c"] }] },
+  ])), /carry them whole/);
+  // Closed-book has no checkout to plant into and no stages to drop at.
+  assert.throws(() => validateExperimentRunConfig({
+    ...runConfig, arm: EXPERIMENT_CLOSED_BOOK_LABEL, sessionType: EXPERIMENT_CLOSED_BOOK_LABEL,
+    guidance: undefined, ledgerTasks: undefined, querySeed: undefined,
+    staleArtifacts: [artifactAsk],
+  }), /no referent/);
+
+  checks.aStaleArtifactNeverBecomesADiskMemory = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 112 - the artifact verdicts never pool recall with re-derivation, and never
+// silently drop a run and a plan that disagree.
+//
+// `crossref` can be answered by re-opening the file, which is why it exists: it measures
+// re-derivation where the other schemas measure recall, and a run that aces it while
+// failing `manifest` is telling us it worked rather than remembered. Pooling the two into
+// one accuracy would report that as recall and the control would have been wasted.
+//
+// The lens also has to distinguish four things a cruder reading collapses: a note returned
+// byte-identical to what was planted (never opened), a note read and left alone field by
+// field, a note deleted outright, and a record naming an ask the plan does not carry. That
+// last one is not an absence: both came from the same staging, so a mismatch means the run
+// and the plan disagree about what was asked, and reporting it as missing would hide it.
+// ---------------------------------------------------------------------------
+{
+  const artifacts = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+
+  const recallAsk = {
+    id: "af-01", schema: "manifest", rederivable: false,
+    fields: [
+      { key: "pass-01", truth: ["a.c"], stale: ["z.c"], rederivable: false },
+      { key: "pass-02", truth: ["b.c"], stale: ["y.c"], rederivable: false },
+    ],
+  };
+  const controlAsk = {
+    id: "af-02", schema: "crossref", rederivable: true,
+    fields: [
+      { key: "p.c", truth: "q.h", stale: "r.h", rederivable: true },
+      { key: "s.c", truth: "t.h", stale: "u.h", rederivable: true },
+    ],
+  };
+  const note = (ask, values) => artifacts.renderStaleArtifact({
+    ...ask, fields: ask.fields.map((field) => ({ ...field, stale: values[field.key] ?? field.stale })),
+  });
+
+  // The shape that motivates the split: every recall field missed, every control field hit.
+  const split = artifacts.staleArtifactVerdicts({
+    artifacts: [recallAsk, controlAsk],
+    records: [
+      { id: "af-01", schema: "manifest", missing: false, untouched: true, returned: note(recallAsk, {}) },
+      { id: "af-02", schema: "crossref", missing: false, untouched: false,
+        returned: note(controlAsk, { "p.c": "q.h", "s.c": "t.h" }) },
+    ],
+  });
+  assert.equal(split.recall.accuracy, 0, "a run that corrected no recall field scores above zero");
+  assert.equal(split.rederivable.accuracy, 1, "a run that corrected every control field scores below one");
+  assert.equal(split.recall.asks, 1, "the control ask was counted as recall");
+  assert.equal(split.rederivable.asks, 1, "the recall ask was counted as re-derivation");
+  // UNTOUCHED IS ITS OWN FINDING. A note returned byte-identical to what was planted is a
+  // model that never opened it, which is not the same as one that read it and changed
+  // nothing.
+  assert.equal(split.untouched, 1, "a note returned exactly as planted is not reported untouched");
+
+  // ABSTENTION LEAVES THE DENOMINATOR, so declining to guess neither helps nor hurts, and
+  // `fields` is reported beside it so the denominator is never hidden.
+  const abstained = artifacts.staleArtifactVerdicts({
+    artifacts: [recallAsk],
+    records: [{ id: "af-01", schema: "manifest", missing: false, untouched: false,
+      returned: note(recallAsk, { "pass-01": ["a.c"], "pass-02": [artifacts.ARTIFACT_UNVERIFIED] }) }],
+  });
+  assert.equal(abstained.recall.accuracy, 1,
+    "an abstention is scored against the model rather than held out");
+  assert.equal(abstained.recall.abstained, 1, "the abstention was not counted");
+  assert.equal(abstained.recall.fields, 2, "the denominator hides how many fields were asked");
+
+  // A DELETED note is not a wrong answer: it is reported as such, with its fields owed.
+  const deleted = artifacts.staleArtifactVerdicts({
+    artifacts: [recallAsk],
+    records: [{ id: "af-01", schema: "manifest", missing: true, returned: null }],
+  });
+  assert.equal(deleted.deleted, 1, "a deleted note is not reported deleted");
+  assert.equal(deleted.rows[0].missing, recallAsk.fields.length,
+    "a deleted note does not owe its fields");
+  assert.equal(deleted.recall.asks, 0, "a deleted note was graded as if it had been answered");
+
+  // A RECORD NAMING AN ASK THE PLAN DOES NOT CARRY is surfaced, never dropped: run and
+  // plan came from one staging, so disagreement is a finding.
+  const stray = artifacts.staleArtifactVerdicts({
+    artifacts: [recallAsk],
+    records: [{ id: "af-99", schema: "manifest", missing: false, untouched: false, returned: "# x\\n" }],
+  });
+  assert.equal(stray.unmatched, 1, "a record naming an unknown ask is silently dropped");
+
+  // A run staged before the instrument reports nothing rather than an empty score.
+  assert.equal(artifacts.staleArtifactVerdicts({ records: [], artifacts: [] }).asks, 0,
+    "a pre-instrument run invents artifact verdicts");
+
+  // And the adjudicator actually reads it, keyed off the PLAN so a v4 run reports null.
+  const adjudicator = readFileSync(
+    join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"), "utf8");
+  assert(adjudicator.includes("staleArtifactVerdicts({"),
+    "the adjudicator does not grade the stale artifacts");
+  assert(adjudicator.includes("plan.staleArtifacts === undefined ? null"),
+    "the adjudicator does not report null for a run staged before the instrument");
+  assert(adjudicator.includes('join(runDir, "stale-artifacts.jsonl")'),
+    "the adjudicator does not read the collection snapshots");
+
+  checks.artifactVerdictsSeparateRecallFromRederivation = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 113 - everything the harness imports is everything the harness copies.
+//
+// The sandbox mounts a COPY of the harness, listed file by file in HARNESS_SOURCE, and the
+// worker imports the whole graph eagerly at startup. A module that the extension imports
+// but the list omits is not a subtle failure: the worker dies before its first turn with
+// MODULE_NOT_FOUND and the supervisor reports "worker readiness lost", which is what killed
+// the first v5 smoke campaign on both arms simultaneously. `scripts/lib/pi_context_
+// artifacts.mjs` was imported by the extension and absent from the list.
+//
+// Nothing caught it, because every other gate imports from the CHECKOUT, where the file is
+// obviously present. Only the namespace is missing it. So this walks the relative import
+// graph from the listed entry points and asserts closure: reachable implies copied.
+// ---------------------------------------------------------------------------
+{
+  const { HARNESS_SOURCE, STEER_HARNESS_SOURCE } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_sandbox.mjs")));
+
+  // Relative specifiers only. A bare specifier is a dependency resolved from the mounted
+  // node_modules, not something this list is responsible for.
+  const RELATIVE_IMPORT = /(?:^|\n)\s*(?:import|export)[\s\S]{0,400}?from\s+["'](\.[^"']+)["']/g;
+  const DYNAMIC_IMPORT = /import\(\s*["'](\.[^"']+)["']\s*\)/g;
+
+  const reachableFrom = (roots, listed) => {
+    const seen = new Set();
+    const missing = [];
+    const queue = [...roots];
+    while (queue.length > 0) {
+      const file = queue.shift();
+      if (seen.has(file)) continue;
+      seen.add(file);
+      const absolute = join(PROJECT, file);
+      if (!existsSync(absolute)) continue;
+      const text = readFileSync(absolute, "utf8");
+      const dir = file.includes("/") ? file.slice(0, file.lastIndexOf("/")) : "";
+      for (const pattern of [RELATIVE_IMPORT, DYNAMIC_IMPORT]) {
+        pattern.lastIndex = 0;
+        for (const match of text.matchAll(pattern)) {
+          // Normalise `dir/./x` and `dir/../x` without touching the filesystem, so the
+          // check is about the LIST rather than about what happens to exist.
+          const parts = `${dir}/${match[1]}`.split("/");
+          const stack = [];
+          for (const part of parts) {
+            if (part === "." || part === "") continue;
+            if (part === "..") stack.pop();
+            else stack.push(part);
+          }
+          const resolved = stack.join("/");
+          if (!existsSync(join(PROJECT, resolved))) continue;
+          if (!listed.includes(resolved)) missing.push(`${file} -> ${resolved}`);
+          queue.push(resolved);
+        }
+      }
+    }
+    return missing;
+  };
+
+  const entryPoints = [
+    "scripts/run_pi_context_experiment_worker.mjs",
+    "scripts/pi_context_experiment_extension.mjs",
+  ];
+  assert.deepEqual(reachableFrom(entryPoints, HARNESS_SOURCE), [],
+    "the harness imports a module the sandbox never copies, so the worker dies at startup");
+  assert.deepEqual(
+    reachableFrom([...entryPoints, "scripts/run_steer_session_worker.mjs"], STEER_HARNESS_SOURCE),
+    [], "a steer run imports a module its namespace never copies");
+
+  // THE WALK WORKS BEFORE IT IS TRUSTED. Removing a module the extension genuinely imports
+  // must be reported, or an empty result above means nothing.
+  const withoutArtifacts = HARNESS_SOURCE.filter(
+    (file) => file !== "scripts/lib/pi_context_artifacts.mjs");
+  const found = reachableFrom(entryPoints, withoutArtifacts);
+  assert(found.some((edge) => edge.endsWith("-> scripts/lib/pi_context_artifacts.mjs")),
+    "the import walk misses a module that is actually imported, so its empty result is vacuous");
+
+  checks.everythingTheHarnessImportsIsEverythingItCopies = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 114 - one writable directory inside a read-only checkout.
+//
+// The v5 stale artifacts are notes the model is asked to bring up to date, so it has to be
+// able to EDIT one. The checkout is read-only on purpose (the tree is graded material), and
+// the first v5 smoke run died on exactly that: both arms delivered four stages, hit the ask
+// stage, and latched "ENOENT: no such file or directory, mkdir '/work/notes'".
+//
+// Opening the whole tree was the wrong fix. A per-run directory is layered over the
+// read-only bind instead: the corpus stays pristine and only the notes are writable. It
+// lives INSIDE /work rather than in /tmp or $HOME because `read` is fenced to the checkout
+// (gate 67), and a note the model could not open with its ordinary reading tool, and had to
+// reach with `bash` instead, would be a tell in itself.
+// ---------------------------------------------------------------------------
+{
+  const { SANDBOX_PATHS, sandboxArgv, modelWrittenFiles, sandboxIdentityFiles } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_sandbox.mjs")));
+
+  const layout = {
+    checkoutDir: "/host/repo", sessionDir: "/host/session", runDir: "/host/run",
+    harnessDir: "/host/harness", piRoot: "/host/pi", nodeExecutable: "/host/node",
+    homeDir: "/host/home", identityDir: "/host/identity", agentDir: "/host/agent",
+    authPath: "/host/auth.json", scratchDir: "/host/scratch",
+  };
+  const withNotes = sandboxArgv({ ...layout, notesDir: "/host/notes" });
+  const without = sandboxArgv(layout);
+
+  // The checkout is READ-ONLY, and stays so.
+  const workAt = withNotes.indexOf(SANDBOX_PATHS.work);
+  assert.equal(withNotes[workAt - 2], "--ro-bind",
+    "the checkout is no longer read-only, so the graded tree can be edited");
+
+  // The notes bind exists and is WRITABLE.
+  const notesAt = withNotes.indexOf(SANDBOX_PATHS.notes);
+  assert(notesAt > 0, "no writable notes directory is bound, so planting an artifact fails");
+  assert.equal(withNotes[notesAt - 2], "--bind", "the notes directory is bound read-only");
+  assert.equal(withNotes[notesAt - 1], "/host/notes", "the notes bind names the wrong host directory");
+
+  // ORDER IS THE WHOLE MECHANISM: a bind layered over the checkout must come AFTER it, or
+  // the read-only mount covers it and the artifact is unwritable again.
+  assert(notesAt > workAt,
+    "the notes bind is applied before the checkout, so the read-only mount covers it");
+
+  // It sits inside the checkout, so the read fence does not have to learn about it.
+  assert(SANDBOX_PATHS.notes.startsWith(`${SANDBOX_PATHS.work}/`),
+    "the notes directory is outside the checkout, where the read tool refuses to open it");
+
+  // A v4 campaign has no notes and its mount shape is unchanged, so sealed campaigns keep
+  // running exactly as they ran.
+  assert(!without.includes(SANDBOX_PATHS.notes),
+    "a run with no artifacts still gets a notes bind, changing the sealed mount shape");
+
+  // Whatever the model leaves in the notes directory is SEALED beside its home and scratch.
+  const scratchRoot = mkdtempSync(join(tmpdir(), "pi-fold-notes-"));
+  try {
+    const home = join(scratchRoot, "home");
+    const scratch = join(scratchRoot, "scratch");
+    const notes = join(scratchRoot, "notes");
+    for (const dir of [home, scratch, notes]) mkdirSync(dir, { recursive: true });
+    writeFileSync(join(notes, "review-passes.md"), "# Review passes\n");
+    const sealed = modelWrittenFiles(home, scratch, notes);
+    assert(sealed.some((file) => file.path === `${SANDBOX_PATHS.notes}/review-passes.md`),
+      "a file left in the notes directory is not sealed with the rest of the model's writes");
+    assert.deepEqual(modelWrittenFiles(home, scratch), [],
+      "the write audit invents notes for a run that has none");
+  } finally {
+    rmSync(scratchRoot, { recursive: true, force: true });
+  }
+
+  // And the supervisor creates it for EVERY run, so the mount shape does not vary with the
+  // plan, and passes it to both the sandbox and the write audit.
+  const supervisor = readFileSync(
+    join(PROJECT, "scripts", "run_pi_context_experiment.mjs"), "utf8");
+  assert(supervisor.includes("const [homeDir, scratchDir, notesDir] = modelWritableTrees(sandboxRoot)"),
+    "the supervisor does not create the notes directory");
+  assert(supervisor.includes("scratchDir, notesDir,") &&
+    supervisor.includes("modelWrittenFiles(...modelWritableTrees(bindSources.sealed.sandbox))"),
+  "the supervisor does not pass the notes directory to the sandbox and the write audit");
+  // The write audit reads the sandbox tree where the SEAL leaves it. The run executes out of
+  // an opaque staging root (gate 122) and the trees are renamed into <runDir>.sandbox once
+  // the worker is gone, so an audit reading the live root would find nothing at all.
+  assert.deepEqual(modelWritableTrees("/r.sandbox"),
+    ["/r.sandbox/home", "/r.sandbox/scratch", "/r.sandbox/notes"],
+    "the writable trees the sandbox binds and the write audit reads have drifted apart");
+
+  // AND IT CREATES THE MOUNT POINT IN THE CHECKOUT. bwrap makes a missing mount target
+  // itself, but it cannot make one inside a bind it has just mounted read-only, so the bind
+  // above is not sufficient on its own: without the directory the run dies at STARTUP with
+  // "Can't mkdir /work/notes: Read-only file system", before a single stage is delivered.
+  assert(/mkdirSync\(notesMountPoint/.test(supervisor),
+    "the supervisor does not create the notes mount point inside the checkout");
+  assert(/The staged corpus occupies the notes mount point/.test(supervisor),
+    "nothing refuses a corpus whose own files would be covered by the notes mount");
+
+  // The mount is PROVEN, not argued. Everything above reads argv and source; only running
+  // the namespace shows whether the kernel accepts the layering, and the two live smoke
+  // campaigns died on exactly the parts argv cannot speak for.
+  const probeRoot = mkdtempSync(join(tmpdir(), "pi-fold-mount-"));
+  try {
+    const dirs = Object.fromEntries(["repo", "notes", "session", "run", "harness", "pi",
+      "home", "identity", "agent", "scratch"].map((name) => [name, join(probeRoot, name)]));
+    for (const dir of Object.values(dirs)) mkdirSync(dir, { recursive: true });
+    // What the supervisor now does: the mount point exists in the checkout before the bind.
+    mkdirSync(join(dirs.repo, basename(SANDBOX_PATHS.notes)));
+    writeFileSync(join(dirs.repo, "corpus.txt"), "graded material\n");
+    const authPath = join(probeRoot, "auth.json");
+    writeFileSync(authPath, "{}\n");
+    const identity = sandboxIdentityFiles(process.getuid(), process.getgid());
+    writeFileSync(join(dirs.identity, "passwd"), identity.passwd);
+    writeFileSync(join(dirs.identity, "group"), identity.group);
+
+    const argv = sandboxArgv({
+      checkoutDir: dirs.repo, notesDir: dirs.notes, sessionDir: dirs.session, runDir: dirs.run,
+      harnessDir: dirs.harness, piRoot: dirs.pi, nodeExecutable: process.execPath,
+      homeDir: dirs.home, identityDir: dirs.identity, agentDir: dirs.agent,
+      authPath, scratchDir: dirs.scratch,
+    });
+    const mounts = argv.slice(0, argv.lastIndexOf("--"));
+    const notes = SANDBOX_PATHS.notes;
+    const work = SANDBOX_PATHS.work;
+    const probe = spawnSync(mounts[0], [...mounts.slice(1), "--", "/bin/sh", "-c", [
+      `echo stale > ${notes}/review.md && echo NOTES_WRITABLE`,
+      `echo corrected > ${notes}/review.md && echo NOTES_EDITABLE`,
+      `echo tampered > ${work}/corpus.txt 2>/dev/null && echo CORPUS_WRITABLE`,
+      `rm -f ${work}/corpus.txt 2>/dev/null && echo CORPUS_DELETABLE`,
+      `cat ${work}/corpus.txt`,
+    ].join("; ")], { encoding: "utf8" });
+
+    assert.equal(probe.status, 0,
+      `the sandbox does not start with a notes directory bound: ${probe.stderr}`);
+    assert(probe.stdout.includes("NOTES_WRITABLE"),
+      "the model cannot write the stale artifact it is asked to bring up to date");
+    assert(probe.stdout.includes("NOTES_EDITABLE"),
+      "the model cannot edit the note a second time");
+    assert(!probe.stdout.includes("CORPUS_WRITABLE"),
+      "the graded corpus is writable, so an edit there drifts the material being measured");
+    assert(!probe.stdout.includes("CORPUS_DELETABLE"),
+      "the graded corpus can be deleted from inside the namespace");
+    assert(probe.stdout.includes("graded material"),
+      "the corpus did not survive the run that tried to overwrite it");
+    // The write reaches the HOST, which is the only reason the seal can see it.
+    assert.equal(readFileSync(join(dirs.notes, "review.md"), "utf8"), "corrected\n",
+      "what the model writes to the notes directory never reaches the host, so it is unsealed");
+  } finally {
+    rmSync(probeRoot, { recursive: true, force: true });
+  }
+
+  checks.oneWritableDirectoryInsideAReadOnlyCheckout = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 115 - one definition of which end block a plan asks, and a reader for the v5 one.
+//
+// The supervisor composes the end block to SEND it; the adjudicator recomputes it to CHECK
+// the manifest pin. Those were two inline branches, and only the supervisor learned about
+// v5, so the adjudicator demanded a ledger from a plan that has none and died with "End
+// block requires the plan's ledger" AFTER both arms of sol-20260825-v5smoke3 had run and
+// sealed. A sealed run that cannot be graded is the failure a corpus cannot afford, which is
+// gate 76's lesson (one definition, every reader through it) on a different asset.
+// ---------------------------------------------------------------------------
+{
+  const {
+    composeEndBlockPrompt, endBlockAdjacencyPrompt, endBlockAdjacencyTranscript, endBlockPrompt,
+  } = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_experiment.mjs")));
+  const { gradeAdjacency } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+
+  const questions = [{
+    id: "eb-01", schema: "adjacency", relation: "pass-to-neighbour", rederivable: false,
+    subjectStage: 1, anchor: "src/tool_writeout.h", side: "after", wanted: 2,
+    truth: ["lib/curlx/strparse.c", "lib/curlx/strparse.h", "lib/easygetopt.c"],
+  }];
+  const gateSeed = "b".repeat(32);
+  const ledgerPlan = { ledger: buildLedger({ mode: "full", contentSeed: "c".repeat(32) }) };
+  const adjacencyPlan = { endBlockAdjacency: questions };
+
+  // THE PLAN DECIDES, and neither caller gets a vote.
+  assert.equal(composeEndBlockPrompt(adjacencyPlan, gateSeed), endBlockAdjacencyPrompt(questions),
+    "a v5 plan does not compose the adjacency end block");
+  assert.equal(composeEndBlockPrompt(ledgerPlan, gateSeed), endBlockPrompt(ledgerPlan.ledger, gateSeed),
+    "a v4 plan no longer composes its ledger end block, so sealed campaigns stop grading");
+  assert.throws(() => composeEndBlockPrompt({}, gateSeed), /carries neither/,
+    "a plan with no end block of either kind composes something rather than being refused");
+
+  // BOTH CALLERS THROUGH IT, and no second inline branch left behind.
+  const supervisor = readFileSync(join(PROJECT, "scripts", "run_pi_context_experiment.mjs"), "utf8");
+  const adjudicator = readFileSync(
+    join(PROJECT, "scripts", "adjudicate_pi_context_experiment.mjs"), "utf8");
+  for (const [name, source] of [["supervisor", supervisor], ["adjudicator", adjudicator]]) {
+    assert(source.includes("composeEndBlockPrompt("),
+      `the ${name} does not compose the end block through the shared definition`);
+    assert(!/endBlockPrompt\(plan\.ledger/.test(source),
+      `the ${name} still branches on the ledger inline, which is how v5 broke grading`);
+  }
+
+  // THE READER. Exact prompt bytes or not delivered, never a fuzzy match.
+  const prompt = endBlockAdjacencyPrompt(questions);
+  const session = (promptText, reply) => [
+    { type: "message", message: { role: "user", content: promptText } },
+    { type: "message", message: { role: "assistant", content: reply } },
+  ];
+  const answered = endBlockAdjacencyTranscript({
+    entries: session(prompt, "eb-01: lib/curlx/strparse.c, lib/easygetopt.c"), questions });
+  assert.equal(answered.delivered, true, "the exact end-block prompt reads as undelivered");
+  assert.deepEqual(answered.answers[0].named, ["lib/curlx/strparse.c", "lib/easygetopt.c"],
+    "a two-file answer line does not parse to its two files");
+  assert.equal(gradeAdjacency({ question: questions[0], named: answered.answers[0].named }).outcome,
+    "correct", "two named files both in the truth do not grade correct");
+
+  const drifted = endBlockAdjacencyTranscript({
+    entries: session(`${prompt} and one more thing`, "eb-01: lib/easygetopt.c"), questions });
+  assert.equal(drifted.delivered, false,
+    "a drifted end-block prompt is fuzzily matched instead of reading as undelivered");
+
+  // AN ABSTENTION IS NOT A WRONG ANSWER. The ask says to say so rather than guess, so the
+  // sentence that says so must reach the grader as zero names.
+  const declined = endBlockAdjacencyTranscript({
+    entries: session(prompt, "eb-01: I cannot place that one."), questions });
+  assert.deepEqual(declined.answers[0].named, [],
+    "a declined answer parses as names, so honest abstention grades as guessing");
+  assert.equal(gradeAdjacency({ question: questions[0], named: declined.answers[0].named }).outcome,
+    "abstained", "an abstention does not grade as one");
+
+  // A wrong answer still grades wrong, so the abstention path is not swallowing failures.
+  const wrong = endBlockAdjacencyTranscript({
+    entries: session(prompt, "eb-01: lib/vauth/cleartext.c, lib/headers.c"), questions });
+  assert.equal(gradeAdjacency({ question: questions[0], named: wrong.answers[0].named }).outcome,
+    "wrong", "two named files, neither in the truth, do not grade wrong");
+
+  // THE SEAL MUST NOT LAG THE CODE. The v5 instrument module was hand-missed from the
+  // pinned list while every runtime file joins by directory walk.
+  assert(/"scripts\/lib\/pi_context_artifacts\.mjs"/.test(supervisor),
+    "the stale-artifact instrument is not pinned, so a run does not seal the code that graded it");
+
+  checks.oneDefinitionOfWhichEndBlockAPlanAsks = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 116 - a stage is a user message, and Pi's own compaction trigger is reachable.
+//
+// Almost every tell and every resume defect descended from ONE decision. `repo_stage`
+// existed because delivery was pull-based; pull made the run one enormous turn; the giant
+// turn starved Pi's own threshold check; that starvation is why the fence existed; the fence
+// aborted turns; the aborts triggered resumes; the resumes were the priming whose dose
+// scaled 1:1 with fence share. Delivering stages as ordinary user messages collapses the
+// whole chain, and the load-bearing claim underneath it is about PI'S source, not ours: that
+// `_checkCompaction` is reached at a turn boundary. That claim is READ from Pi rather than
+// restated here, on gate 52's rule, so an upgrade that moves the arithmetic breaks this gate
+// instead of silently leaving the native arm unable to compact.
+// ---------------------------------------------------------------------------
+{
+  const worker = source("scripts/run_pi_context_experiment_worker.mjs");
+  const extension = source("scripts/pi_context_experiment_extension.mjs");
+  const lib = source("scripts/lib/pi_context_experiment.mjs");
+
+  // ONE STAGE, ONE USER MESSAGE, and the worker asks for it rather than the model.
+  assert(/for \(let stage = 1; stage <= plan\.stageCount; stage \+= 1\)/.test(worker),
+    "the worker does not walk the plan's stages itself");
+  const loop = worker.slice(
+    worker.indexOf("for (let stage = 1; stage <= plan.stageCount; stage += 1)"),
+    worker.indexOf("experiment.collectPendingArtifact();"));
+  assert(/const served = await experiment\.deliverStage\(\);/.test(loop) &&
+    /await session\.prompt\(served\.text/.test(loop),
+  "a stage is not delivered as a user message");
+  assert(/waitForDurableTerminalQuiescence/.test(loop),
+    "the worker sends the next stage without waiting for the turn to settle");
+
+  // THE MODEL IS NEVER HANDED A KEY, anywhere. `params.key` was the only consumer and the
+  // payload's trailing NEXT_KEY line was the only carrier; both are gone, and the run config
+  // no longer issues one.
+  assert(!/NEXT_KEY/.test(lib) || !/nextKeyPlaceholder/.test(lib),
+    "the stage payload still closes with a delivery key");
+  assert(!/nextKeyPlaceholder/.test(lib),
+    "the renderer still splices a key placeholder into the payload");
+  // The COMPARISON, not the word: the block above explains what was deleted and names it.
+  assert(!/params\.key\s*[!=]==/.test(extension),
+    "something still checks a key the model was asked to carry");
+  assert(!/Type\.Object\(\{\s*key:/.test(extension),
+    "a registered tool still takes a key parameter");
+  const contract = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_experiment.mjs")));
+  assert(!contract.EXPERIMENT_RUN_CONFIG_KEYS.includes("firstChallenge"),
+    "a new run still issues a first challenge");
+  assert(contract.EXPERIMENT_RUN_CONFIG_OPTIONAL_KEYS.includes("firstChallenge"),
+    "a sealed run's first challenge is refused on read, which un-adjudicates the corpus");
+
+  // NOTHING RESUMES, because nothing aborts and stopping is the expected shape.
+  for (const [name, text] of [["worker", worker], ["extension", extension]]) {
+    assert(!/resumePrompt|fenceCompactedSinceLastPrompt|awaitFenceOutcome|harness-fence/.test(text),
+      `the ${name} still carries the fence or the resume it required`);
+  }
+
+  // THE RETIRED ARM IS READABLE AND NOT LAUNCHABLE.
+  assert(EXPERIMENT_ARMS.includes("nativefence"),
+    "a sealed nativefence run no longer validates, so seven campaigns stop adjudicating");
+  assert(!contract.EXPERIMENT_LAUNCHABLE_ARMS.includes("nativefence"),
+    "the retired matched-fence arm can still be launched");
+  for (const arm of contract.EXPERIMENT_LAUNCHABLE_ARMS) {
+    assert(EXPERIMENT_ARMS.includes(arm), `${arm} is launchable but not readable`);
+  }
+
+  // PI'S OWN TRIGGER IS REACHABLE, read from Pi. Two call sites carry the whole claim:
+  // one after an agent run settles, one before each user message is sent. Under pull
+  // delivery the first fired ONCE for a 64-stage run and the second never mattered, which
+  // is why plain native only ever hit the overflow path. One user message per stage
+  // reaches both, every turn.
+  const piSession = readFileSync(
+    join(PI_INSTALL_ROOT, "dist", "core", "agent-session.js"), "utf8");
+  // Pi 1.0 renamed msg to message and passes the completed run's tool results.
+  // Both forms must still await the same proactive check at the post-run boundary.
+  const postRunCall = /await this\._checkCompaction\((?:msg|message)(?:, true, toolResults)?\)/g;
+  const postRunChecksCompaction = (text) =>
+    /_handlePostAgentRun\(\)\s*\{[\s\S]*?await this\._checkCompaction\((?:msg|message)(?:, true, toolResults)?\)/.test(text);
+  assert(postRunChecksCompaction(piSession),
+    "Pi no longer checks compaction after an agent run settles, so the turn boundary buys nothing");
+  assert(!postRunChecksCompaction(piSession.replace(postRunCall, "false")),
+    "the post-run source check still passes with its compaction call removed");
+  assert(/await this\.agent\.prompt\(messages\);[\s\S]*?await this\._handlePostAgentRun\(\)/.test(piSession),
+    "Pi no longer reaches the post-run compaction boundary after awaiting its agent");
+  const beforeSend = /await this\._checkCompaction\(lastAssistant, false\)/.test(piSession);
+  assert(beforeSend,
+    "Pi no longer checks compaction before sending a user message, so pushed stages never trigger it");
+  // And the threshold branch it reaches is the proactive one, not just overflow rescue.
+  assert(/shouldCompact\(contextTokens, contextWindow, settings\)/.test(piSession),
+    "Pi's proactive threshold branch is gone, so a turn boundary cannot compact on occupancy");
+
+  checks.aStageIsAUserMessageAndPisOwnTriggerIsReachable = true;
+}
+
+
+// ---------------------------------------------------------------------------
+// GATE 117 - a stage is found by ordinal under BOTH delivery shapes, and a failed pull run
+// is never given windows it did not have.
+//
+// Every transcript lens (probes, deliverables, audit traces, provenance) is anchored on
+// `stageResultIndexByOrdinal`, which found stages by their `repo_stage` tool result. A push
+// run has no such tool results, so without this the anchor returns an empty map and every
+// probe on every v5 run reads as unanswered: a silent zero, which is the worst shape a
+// grading defect can take.
+//
+// The shape is PASSED IN rather than sniffed, and that is the load-bearing decision. A pull
+// run that delivered zero stages also has no stage tool results, so a sniffing anchor would
+// fall through to counting user messages and index that run's workload prompt as stage 1,
+// inventing an answer window on exactly the runs that failed.
+// ---------------------------------------------------------------------------
+{
+  const { stageResultIndexByOrdinal } = await import(
+    pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_experiment.mjs")));
+
+  const userMsg = (text) => ({ type: "message", message: { role: "user", content: text } });
+  const assistantMsg = (text) => ({ type: "message", message: { role: "assistant", content: text } });
+  const stageResult = (stage) => ({
+    type: "message",
+    message: { role: "toolResult", toolName: EXPERIMENT_TOOL_NAME, details: { stage } },
+  });
+
+  // PULL, unchanged: addressed by the ordinal the extension stamped, never by position.
+  const pull = [userMsg("workload"), assistantMsg("a"), stageResult(1), assistantMsg("b"), stageResult(2)];
+  const pullIndex = stageResultIndexByOrdinal(pull);
+  assert.deepEqual([...pullIndex.entries()], [[1, 2], [2, 4]],
+    "a pull run's stages are no longer found by their tool result's own ordinal");
+  // An errored stage result is not a delivery.
+  const errored = [{ type: "message", message: {
+    role: "toolResult", toolName: EXPERIMENT_TOOL_NAME, isError: true, details: { stage: 1 } } }];
+  assert.equal(stageResultIndexByOrdinal(errored).size, 0,
+    "a failed stage call counts as a delivered stage");
+
+  // PUSH: one user message per stage, in order.
+  const push = [userMsg("stage 1"), assistantMsg("a"), userMsg("stage 2"), assistantMsg("b"),
+    userMsg("stage 3"), assistantMsg("c")];
+  const pushIndex = stageResultIndexByOrdinal(push, { pushDelivered: true, stageCount: 3 });
+  assert.deepEqual([...pushIndex.entries()], [[1, 0], [2, 2], [3, 4]],
+    "a push run's stages are not found as the user messages that carried them");
+
+  // THE END BLOCK IS A USER MESSAGE TOO and must never be claimed as a stage: a probe
+  // scanning forward from it would run off the end of the transcript.
+  const withEndBlock = [...push, userMsg("end block"), assistantMsg("answers")];
+  const bounded = stageResultIndexByOrdinal(withEndBlock, { pushDelivered: true, stageCount: 3 });
+  assert.equal(bounded.size, 3, "the end block was claimed as a stage");
+  assert(!bounded.has(4), "the end block was indexed as stage 4");
+
+  // THE FALSIFICATION OF SNIFFING. A pull run that delivered NOTHING has one user message
+  // and no stage results; asked as the pull run it is, it yields no windows at all.
+  const failedPull = [userMsg("workload"), assistantMsg("I cannot continue")];
+  assert.equal(stageResultIndexByOrdinal(failedPull).size, 0,
+    "a pull run that delivered no stages is given a window it never had");
+  // Asked as a push run, the SAME transcript would have produced one, which is exactly why
+  // the shape is passed in rather than detected.
+  assert.equal(stageResultIndexByOrdinal(failedPull, { pushDelivered: true, stageCount: 8 }).size, 1,
+    "the fixture no longer demonstrates what sniffing would have cost");
+
+  // THE ADJUDICATOR SAYS WHICH SHAPE, from the run's own config, and threads it to every lens.
+  const adj = source("scripts/adjudicate_pi_context_experiment.mjs");
+  assert(/const pushDelivered = !closedBook && !pullDelivered;/.test(adj),
+    "the adjudicator does not derive the delivery shape from the run config");
+  for (const lens of ["probeTranscripts", "deliverableTranscripts", "traceStepTranscripts",
+    "probeProvenance"]) {
+    const call = new RegExp(`${lens}\\(\\{[^}]*pushDelivered`);
+    assert(call.test(adj), `${lens} is not told which delivery shape it is reading`);
+  }
+
+  checks.aStageIsFoundByOrdinalUnderBothDeliveryShapes = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 118 - the in-run probe waves are deleted from every plan this builder makes, and a
+// plan that carries SOME of the sealed schedule is refused by name.
+//
+// Shane 2026-08-25. The waves were four labelled question blocks at ordinals 16/32/48/64,
+// six questions each, ids `probe-NN-NN`, asking for recorded trace values, audit code words
+// and file positions. They rehearsed the run's own collection classes four times before
+// half the material was delivered, which is a hoarding instruction aimed squarely at the
+// mechanism under test: Pi's compaction summary decides what survives, and a model that
+// knows it will be quizzed writes a summary that keeps quiz-shaped facts. v3 measured that
+// shape from the other direction when sol's summarizer carried 20, 38 and 54 code words
+// verbatim through successive summaries because it could tell they mattered.
+//
+// THE CUT LINE IS BUILDERS OUT, READERS IN. Every sealed campaign's plan carries its waves
+// and must keep adjudicating under this code, so the transcript lenses, the verdicts and
+// the payload renderer's probe branch all stay live: a sealed plan's `payloadSha256` is
+// computed from those exact bytes and would stop matching if the branch went. What is gone
+// is the ability to MAKE one. Asserted against the module namespace rather than the source
+// text, so the gate states the cut line itself and fails on the pre-deletion contract,
+// which exported all five builders.
+//
+// Echo does not survive: recall of a recall needs an earlier answer to point at, and Shane
+// took the loss rather than keep a question block to host it. The audit chains are
+// untouched and still graded at record time, against truth and against the model's own
+// previous step, which is where the unfakeable faithful-to-wrong cell now lives alone.
+// ---------------------------------------------------------------------------
+{
+  const contract = await import("./lib/pi_context_experiment.mjs");
+  for (const gone of ["buildProbes", "buildConversationProbes", "buildChainLinkProbes",
+    "buildEchoProbes", "buildDerivationControlProbes"]) {
+    assert.equal(contract[gone], undefined, `${gone} still exists: a wave can still be built`);
+  }
+  for (const kept of ["probeTranscripts", "probeMechanicalVerdicts", "echoVerdicts",
+    "probeWaveRecovery", "probeProvenance", "probeAnswerPattern", "probeClassOf"]) {
+    assert.equal(typeof contract[kept], "function",
+      `${kept} was deleted with the builders, so no sealed campaign can be read any more`);
+  }
+
+  // ANTI-VACUITY: the fixture really is the sealed shape, both waves, every slot filled.
+  const sealedSchedule = EXPERIMENT_MODE_PLANS.smoke.sealedProbeSchedule;
+  const waveOrdinals = plan.stages.filter((stage) => stage.kind === "probe").map((stage) => stage.ordinal);
+  assert.deepEqual(waveOrdinals, sealedSchedule.stages.slice(),
+    "the fixture is not the sealed shape, so every refusal below would pass for the wrong reason");
+  validateStagePlan(plan);
+
+  const reseal118 = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  // A wave emptied but still CALLED a wave: the plan disagrees with itself.
+  const hollowWave = structuredClone(plan);
+  hollowWave.stages[3].probes = [];
+  hollowWave.probeCount = hollowWave.stages.reduce((total, stage) => total + stage.probes.length, 0);
+  assert.throws(() => validateStagePlan(reseal118(hollowWave)),
+    /disagrees with itself about being a probe wave/);
+  // A wave removed outright, leaving the OTHER one standing. This is the shape a
+  // half-finished deletion produces, and it is neither instrument: not the sealed one the
+  // corpus is read against, not the current one that carries none. The replaced stage is
+  // built as a LEGITIMATE payload stage, its own fresh code word woven in and its payload
+  // rehashed, because a half-built one trips the per-stage laws first and the partial
+  // schedule would never be reached: the first attempt at this fixture died on "Stage 4
+  // code word is missing, malformed, unwoven, or repeated" and proved nothing.
+  const partial = structuredClone(plan);
+  const template = partial.stages.find((stage) =>
+    stage.kind === "read" && stage.files.length > 0 && stage.chainStep === null &&
+    stage.deliverable === null && stage.codeWord !== null);
+  assert(template, "the fixture offers no plain payload stage to model a replacement on");
+  const freshWord = stageCodeWords("gate-118-replacement", 1)[0];
+  assert(!partial.stages.some((stage) => stage.codeWord === freshWord),
+    "the replacement code word collides, so this fixture would fail on uniqueness instead");
+  const replaced = {
+    ...structuredClone(template),
+    ordinal: 4,
+    kind: "read",
+    probes: [],
+    deliverable: null,
+    chainStep: null,
+    codeWord: freshWord,
+    instructions: template.instructions.replace(
+      codeWordSentence(template.ordinal, template.codeWord),
+      codeWordSentence(4, freshWord)),
+  };
+  // The stored stage carries file METADATA only; the payload it attests to was hashed at
+  // staging time over the full file bodies, which this fixture no longer holds. So the
+  // attestation is carried across from the template (it already clears the fold-eligibility
+  // floor) with a distinct hash, which is all the payload-uniqueness law reads.
+  replaced.payloadSha256 = sha256Text(`${replaced.instructions}:gate-118`);
+  partial.stages[3] = replaced;
+  partial.probeCount = partial.stages.reduce((total, stage) => total + stage.probes.length, 0);
+  assert.throws(() => validateStagePlan(reseal118(partial)), /partial probe schedule/);
+  // A wave placed where the sealed schedule never put one.
+  const misplaced = structuredClone(plan);
+  misplaced.stages[5].kind = "probe";
+  misplaced.stages[5].probes = structuredClone(plan.stages[3].probes)
+    .map((probe, index) => ({ ...probe, id: `probe-06-0${index + 1}` }));
+  misplaced.probeCount = misplaced.stages.reduce((total, stage) => total + stage.probes.length, 0);
+  assert.throws(() => validateStagePlan(reseal118(misplaced)),
+    /probe wave the sealed schedule does not place there/);
+
+  // THE RENDERER: silent for a stage with no probes, and still faithful for a sealed one,
+  // which is the half a deletion of the branch would have broken.
+  const sealedStage = plan.stages.find((stage) => stage.kind === "probe");
+  const plainStage = plan.stages.find((stage) => stage.kind !== "probe");
+  const sealedText = stagePayloadText(visibleStage(sealedStage));
+  const plainText = stagePayloadText(visibleStage(plainStage));
+  for (const probe of sealedStage.probes) {
+    assert(sealedText.includes(`- ${probe.id}: `),
+      "the renderer dropped a sealed plan's probe, so its payload hash can no longer match");
+  }
+  assert(!/^- probe-/m.test(plainText),
+    "the renderer emits a probe block for a stage that carries none");
+  // And the whole current-shape plan renders no question block anywhere: proved over every
+  // stage, not just the one sampled above.
+  const currentShape = structuredClone(plan);
+  for (const stage of currentShape.stages) stage.probes = [];
+  for (const stage of currentShape.stages) {
+    const rendered = stagePayloadText(visibleStage(stage));
+    assert(!/probe-\d\d-\d\d|<probe-id>/.test(rendered),
+      `stage ${stage.ordinal} still renders a probe surface with no probes to render`);
+  }
+
+  // THE WATCHDOG IS THE ONE CONSTANT A SEALED PLAN MAY DISAGREE WITH (2026-08-25). It is a
+  // liveness bound on a hung run, not a property of the instrument, so raising it must not
+  // cost the corpus the way raising stageCount or the payload floor would. The tolerance
+  // NAMES the shipped values rather than admitting any number, so a plan carrying a watchdog
+  // this harness never shipped is still refused. Every other pacing constant still binds
+  // exactly, proven one at a time below.
+  const currentWatchdog = EXPERIMENT_MODE_PLANS.smoke.watchdogMs;
+  const sealedWatchdog = EXPERIMENT_MODE_PLANS.smoke.sealedWatchdogMs;
+  assert(sealedWatchdog.length > 0 && !sealedWatchdog.includes(currentWatchdog),
+    "the sealed watchdog list is empty or restates the current bound, so this gate is vacuous");
+  const atWatchdog = (value) => {
+    const mutated = structuredClone(plan);
+    mutated.watchdogMs = value;
+    return reseal118(mutated);
+  };
+  validateStagePlan(atWatchdog(currentWatchdog));
+  for (const shipped of sealedWatchdog) validateStagePlan(atWatchdog(shipped));
+  assert.throws(() => validateStagePlan(atWatchdog(7 * 60 * 1_000)),
+    /watchdog is neither the current bound nor one this harness ever shipped/);
+  // And the tolerance is scoped to the watchdog ALONE: the three constants beside it still
+  // refuse any drift, or "raise the bound" would have quietly become "accept any pacing".
+  for (const [key, value] of [["stageCount", 9], ["stageIntervalMs", 1_000], ["heartbeatMs", 1_000]]) {
+    const mutated = structuredClone(plan);
+    mutated[key] = value;
+    assert.throws(() => validateStagePlan(reseal118(mutated)),
+      key === "stageCount" ? /stage count drifted|constants drifted/ : /constants drifted from its mode plan/,
+    `${key} stopped binding when the watchdog tolerance landed`);
+  }
+
+  checks.theInRunProbeWavesAreDeletedAndAPartialScheduleIsRefused = true;
+  checks.theWatchdogIsTheOneConstantASealedPlanMayDisagreeWith = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 119 - the harness NAMES a stage's files and never pastes their bodies, and the
+// fold-eligibility floor binds the ASSIGNED SOURCE rather than the rendered payload.
+//
+// Shane 2026-08-25, after the pifold arm of sol-20260825-full died at stage 10. A stage is a
+// USER MESSAGE since the key deletion, and `automaticToolBatches` folds TOOL RESULTS, so
+// pasting tens of thousands of characters of source into the payload put the entire workload
+// on a channel pi-fold cannot touch: 980,174 chars across 15 user messages against 860 chars
+// in one tool result, 0.1% foldable. Nine commits fired and every one deferred with
+// `nothing-proposable` and `unmarked_stale_spans: 0` while the projection ran to 1,166,009
+// chars and Pi's derived output budget collapsed to 16 tokens. Folding never suspended and
+// never errored; it had nothing it was permitted to fold.
+//
+// It was never pi-fold's defect. A REAL SESSION PUTS ITS MASS IN TOOL RESULTS because the
+// agent reads files, and nobody pastes 66k chars into a prompt sixty-four times. The stage now
+// names its files and the model opens them itself, which puts the bytes back on the channel a
+// session actually uses while keeping every turn boundary. The smokes could not have caught
+// it: at eight stages the model made 29 to 64 bash calls, so there WAS tool-result mass to
+// fold and the total never approached the window. Only scale exposes it, which is why this
+// gate asserts the SHAPE rather than waiting for another ten-hour run to report it.
+// ---------------------------------------------------------------------------
+{
+  // THE RENDERER IGNORES BODIES EVEN WHEN HANDED THEM. The supervisor's `renderStage` still
+  // reads every file to verify the checkout has not drifted from the plan, and hands the
+  // renderer facts CARRYING `text`; the proof that nothing is pasted has to be driven with
+  // that text present, or it passes vacuously on a fixture whose files have none. This is the
+  // assertion that fails on the pre-change renderer, which spliced a BEGIN/END block per file.
+  const bodyStage = plan.stages.find((stage) => stage.files.length > 0);
+  assert(bodyStage, "no fixture stage assigns files, so this gate proves nothing");
+  const withText = {
+    ...visibleStage(bodyStage),
+    files: bodyStage.files.map((file) => ({ ...file, text: "X".repeat(40_000) })),
+  };
+  const withoutText = stagePayloadText(visibleStage(bodyStage));
+  const withTextRendered = stagePayloadText(withText);
+  assert.equal(withTextRendered, withoutText,
+    "the renderer's output changes when file bodies are present, so it is still pasting them");
+  assert(!/-----\s*BEGIN /.test(withTextRendered) && !/-----\s*END /.test(withTextRendered),
+    "the payload still carries a file-body block");
+  assert(!withTextRendered.includes("X".repeat(200)),
+    "the payload carries the file text it was handed");
+  assert(withTextRendered.length < 8_000,
+    `the payload renders ${withTextRendered.length} chars: the harness is still injecting source`);
+
+  // THE FLOOR BINDS ASSIGNED SOURCE. A stage whose rendered payload is tiny is fine; one that
+  // assigns too little source is not, because that is what the fold-eligibility floor was
+  // always about.
+  const reseal119 = (mutated) => {
+    mutated.planSha256 = stagePlanSha256(mutated);
+    return mutated;
+  };
+  const floor = EXPERIMENT_MODE_PLANS[plan.mode].payloadFloorChars;
+  const target = plan.stages.findIndex((stage) => stage.kind !== "probe" && stage.files.length > 0);
+  assert(target >= 0, "the fixture offers no payload stage to test the floor on");
+  const starved = structuredClone(plan);
+  starved.stages[target].files = starved.stages[target].files.map((file) => ({ ...file, chars: 1 }));
+  assert.throws(() => validateStagePlan(reseal119(starved)), /below the .* fold-eligibility floor/,
+    "a stage assigning almost no source is accepted, so the floor moved to nothing");
+  // And the floor is NOT reading the rendered payload any more: a stage whose payload is far
+  // below the floor but whose assigned source clears it must validate, which is exactly the
+  // shape every stage now has and what the pre-change validator refused.
+  const rendered = stagePayloadText(visibleStage(plan.stages[target]));
+  const assigned = plan.stages[target].files.reduce((total, file) => total + file.chars, 0);
+  assert(rendered.length < floor && assigned >= floor,
+    `the fixture stage renders ${rendered.length} and assigns ${assigned} against a ${floor} floor: ` +
+    "it does not demonstrate the split, so this assertion would pass for the wrong reason");
+  validateStagePlan(reseal119(structuredClone(plan)));
+
+  // The instruction tells the model WHERE, since the bytes no longer come to it.
+  const staging119 = source("scripts/stage_pi_context_experiment.mjs");
+  assert(staging119.includes("Read these files from the ${stage.repoKey} checkout at /work"),
+    "the read instruction does not say where to read from, and nothing delivers the bytes now");
+  // And it must LIST the paths, or naming the checkout tells the model nothing about what to
+  // open. Both instruction kinds, since a revisit stage assigns files too.
+  // The "Files in this stage:" / "New files in this stage:" labels went with the protocol
+  // vocabulary on 2026-08-25; the LISTING is what this gate is about and it survives, now
+  // as a bare join at the end of the ask. Counted on the join expression itself, which is
+  // the part that cannot be satisfied by prose.
+  assert.equal(
+    (staging119.match(/\$\{files\.map\(\(file\) => file\.path\)\.join\(", "\)\}/g) ?? []).length,
+    2, "the read and revisit instructions must each list the paths they assign");
+  // Anchored to the CODE form, not the prose: the comment above the instruction quotes the old
+  // wording on purpose, and a scan for the bare phrase matches that comment and would be
+  // satisfied by deleting the explanation rather than the instruction. Gate 116's lesson.
+  assert(!/`Read every file delivered/.test(staging119),
+    "an instruction still claims the stage delivered its files");
+  // The audit hops moved to ASSIGNED here and that turned out to break every sealed plan,
+  // so both eras are kept and pinned by value in the audit-sentence gate above rather than
+  // by a source scan here. What this gate still owns is that nothing CLAIMS delivery of
+  // bytes the harness no longer sends.
+
+  checks.theHarnessNamesFilesAndNeverPastesThem = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 120 - the run directory is not in the namespace, and the descriptors that
+// replaced it are pinned by position.
+//
+// The bind put run-config.json at /run, and `cat /run/run-config.json` returned the arm, the
+// campaign, the stage count, the frozen querySeed and EVERY stale-artifact ask with its
+// stage, its wording and the full text of the note about to be planted. One command was the
+// exam. Beside it: stale-artifacts.jsonl kept plantedSha256 and returnedSha256, which undoes
+// the consume-on-write bound the instrument depends on; worker-events.jsonl narrated the
+// harness to itself; ipc/requests/stage-NN.json restored the numbering by filename; and
+// /run/repo was a second, WRITABLE path to a checkout that is read-only on purpose. The
+// fence that stops this is `read`, `edit` and `write` only, because `bash` cannot be fenced,
+// so every one of those was reachable. 134 sealed runs and zero touches: latent, not
+// realised, which is the only reason the corpus survives it.
+//
+// Nothing the MODEL needs was ever in there. It was harness plumbing, and a filesystem was
+// simply the easiest IPC to write. The worker's ledgers travel as descriptors the supervisor
+// opens on the HOST, so every file lands exactly where every reader has always found it, and
+// the delivery round-trip travels on a duplex socket, so a stage is never a file at all.
+//
+// ORDER IS THE CONTRACT. The fd a channel writes to is its index in RUN_CHANNEL_FILES plus
+// RUN_CHANNEL_FIRST_FD, and the supervisor's `stdio` array is what makes that true on the
+// other side. Appending to the list is safe; reordering it silently sends a ledger's bytes
+// into another ledger's file. So the map is pinned BY VALUE here rather than derived, which
+// is the only form that fails when someone reorders the list.
+// ---------------------------------------------------------------------------
+{
+  // The map, by value. A derived assertion would agree with any order.
+  assert.equal(DELIVERY_FD, 3, "the delivery socket moved off the descriptor the worker opens");
+  assert.equal(RUN_CHANNEL_FIRST_FD, 4, "the ledgers no longer start after the delivery socket");
+  assert.deepEqual(RUN_CHANNEL_FILES.map((name) => [name, runChannelFd(name)]), [
+    ["worker-events.jsonl", 4],
+    ["tool-results.jsonl", 5],
+    ["provider-requests.jsonl", 6],
+    ["stop-the-world.jsonl", 7],
+    ["stale-artifacts.jsonl", 8],
+    ["failure-latch.jsonl", 9],
+    ["worker-ready.json", 10],
+    ["run-manifest.json", 11],
+    ["worker-report.json", 12],
+  ], "the run channel map moved; a reorder sends one ledger's bytes into another's file");
+  assert.deepEqual([...RUN_CHANNEL_FILES],
+    [...RUN_CHANNEL_LEDGERS, ...RUN_CHANNEL_DOCUMENTS],
+    "the ledgers and the documents no longer make up the channel");
+  assert.throws(() => runChannelFd("pace.jsonl"), /No run channel is defined for pace.jsonl/,
+    "a name with no channel resolves to a descriptor anyway");
+
+  // THE MOUNT IS GONE from the experiment's own namespace, and still there for the steer
+  // tool, whose subject IS the tree the agent edits. Driven through the builder both ways
+  // rather than read off the source, because the argv is what bubblewrap acts on.
+  const layout120 = {
+    checkoutDir: "/host/run/repo", sessionDir: "/host/run/session",
+    harnessDir: "/host/run.sandbox/harness", piRoot: "/host/pi",
+    nodeExecutable: "/host/node", homeDir: "/host/run.sandbox/home",
+    identityDir: "/host/run.sandbox/identity", agentDir: "/host/run.sandbox/agent",
+    authPath: "/host/auth.json", scratchDir: "/host/run.sandbox/scratch",
+  };
+  const experimentArgv = sandboxArgv(layout120);
+  assert(!experimentArgv.includes(SANDBOX_PATHS.run),
+    "the experiment's namespace mounts a run directory again, and one cat is the exam");
+  assert(!experimentArgv.some((argument) => /(^|\/)ipc(\/|$)/.test(String(argument))),
+    "the experiment's namespace mounts a delivery directory again");
+  const steerArgv = sandboxArgv({ ...layout120, runDir: "/host/run", workWritable: true,
+    workerScript: "run_steer_session_worker.mjs" });
+  const runBind = steerArgv.indexOf(SANDBOX_PATHS.run);
+  assert(runBind > 0 && steerArgv[runBind - 1] === "/host/run" &&
+    steerArgv[runBind - 2] === "--bind",
+  "the steer tool lost the run directory its whole protocol is addressed to");
+
+  // The config the worker reads names no run directory either, and one that does is refused
+  // by name. Both halves matter: emitting it would put the path back in the namespace, and
+  // tolerating it on read would let a stale build put it back without anything noticing.
+  const sandboxed120 = sandboxConfig({
+    version: 1, runId: "run-1", runDir: "/host/run", repoDir: "/host/run/repo",
+    sessionDir: "/host/run/session", querySeed: "seed", planPath: "/host/plan.json",
+  });
+  assert.equal(sandboxed120.runDir, undefined,
+    "the worker's config names a run directory the namespace does not have");
+  assert.equal(sandboxed120.repoDir, SANDBOX_PATHS.work);
+  assert.equal(sandboxed120.sessionDir, SANDBOX_PATHS.session);
+  assert.throws(
+    () => validateExperimentRunConfig({ ...runConfig,
+      runDir: SANDBOX_PATHS.run, repoDir: SANDBOX_PATHS.work,
+      sessionDir: SANDBOX_PATHS.session }),
+    /A sandboxed run config names a run directory the namespace does not have/,
+    "a sandboxed config carrying a run directory was accepted");
+
+  // THE WORKER MUST BE ABLE TO EXIT (2026-08-25, found by sol-20260825-fdsmoke, not by this
+  // suite). A socket is a libuv handle: an open one holds the event loop up by itself. Both
+  // arms of that smoke delivered all 8 stages, answered the end block, wrote their manifest
+  // and their report, printed the final summary line, ran off the end of the worker script,
+  // and then sat there. The supervisor waits on the child's exit, so two runs that had done
+  // every piece of their work correctly were going to be killed at the 90 minute watchdog and
+  // reported as failures.
+  //
+  // DRIVEN, in a child process, because the defect is a property of the running process and
+  // no source scan states it. The child models the two halves `openDeliveryChannel` has, and
+  // it needs BOTH: without the unref it never exits, and without a REFERENCED in-flight timer
+  // it exits before its answer arrives. It calls no `process.exit`, which is exactly what hid
+  // this the first time it was probed.
+  {
+    const exitDir = mkdtempSync(join(tmpdir(), "pi-fold-delivery-exit-"));
+    const childPath = join(exitDir, "child.mjs");
+    writeFileSync(childPath, [
+      'import { Socket } from "node:net";',
+      'const s = new Socket({ fd: 3, readable: true, writable: true });',
+      's.setEncoding("utf8");',
+      's.unref();',
+      'let waiting = null;',
+      's.on("data", (chunk) => {',
+      '  clearTimeout(waiting);',
+      '  process.stdout.write(chunk);',
+      '});',
+      'waiting = setTimeout(() => { throw new Error("deadline"); }, 30_000);',
+      's.write("ask\\n");',
+    ].join("\n"));
+    const child = spawn(process.execPath, [childPath], { stdio: ["ignore", "pipe", "ignore", "pipe"] });
+    let answered = "";
+    child.stdout.on("data", (chunk) => { answered += chunk.toString("utf8"); });
+    const socket120 = child.stdio[3];
+    socket120.on("error", () => { /* the child exits first, so a late write can EPIPE */ });
+    socket120.on("data", () => { socket120.write("answered\n"); });
+    const exit120 = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve("never exited"), 20_000);
+      child.on("exit", (code, signal) => { clearTimeout(timer); resolve(`${code}/${signal}`); });
+    });
+    rmSync(exitDir, { recursive: true, force: true });
+    assert.equal(answered.trim(), "answered",
+      "the delivery round trip did not complete, so this gate would pass for the wrong reason");
+    assert.equal(exit120, "0/null",
+      "a worker that finished its delivery could not exit: the socket is holding the event loop");
+  }
+  // And the runtime still does it. The driven check above proves the SHAPE works; this proves
+  // the extension is still built that way, since the child above is a model rather than the
+  // thing itself.
+  const delivery120 = source("scripts/pi_context_experiment_extension.mjs");
+  const channel120 = delivery120.slice(
+    delivery120.indexOf("function openDeliveryChannel("),
+    delivery120.indexOf("function responseIdentity("));
+  assert(channel120.length > 0, "the delivery channel was not found where this gate reads it");
+  assert(/socket\.unref\(\)/.test(channel120),
+    "the delivery socket is referenced again, so a finished worker will never exit");
+  assert(!/timer[^\n]*unref\(\)/.test(channel120),
+    "the in-flight timer is unreferenced, so a worker can exit before its stage arrives");
+
+  checks.theRunDirectoryIsNotInTheNamespace = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 121 - the checkout carries no pointer back to the campaign that made it.
+//
+// `git worktree add` leaves a `.git` FILE in the checkout root, and its whole content is
+// `gitdir: <abs path>/pi-context-experiment/<campaign>/repo.git/worktrees/<name>`. The
+// checkout is the model's cwd, so `cat .git` returned the operator's home, the word
+// pi-context-experiment, the campaign id and a worktree ordinal.
+//
+// It is the most reachable disclosure the harness had, and more so than /proc by a wide
+// margin: the path fence permits the checkout (which is where this sits) and `bash` is not
+// fenced at all, so nothing stopped it. Reading `.git` is also ordinary orientation rather
+// than probing, and the sealed corpus shows models doing it unprompted: sol-20260809 rep 5
+// (`.git` then `.git/config`), sol-20260812 rep 9, sol-20260814-fenced rep 2 (which walked
+// `.git`, `../.git` AND `../../.git`), and sol-20260815-hidden rep 1 (`.git`, `.git/config`,
+// `.git/HEAD`).
+//
+// DRIVEN AGAINST A REAL WORKTREE, because the claim is about what `git worktree add` writes,
+// not about what our source says. The fixture proves the pointer EXISTS and names its own
+// campaign before proving the removal takes it away, so the gate cannot pass by git changing
+// its mind about worktree layout.
+// ---------------------------------------------------------------------------
+{
+  const gitRoot = mkdtempSync(join(tmpdir(), "pi-fold-worktree-"));
+  const origin = join(gitRoot, "pi-context-experiment", "campaign-fixture-121", "origin");
+  mkdirSync(origin, { recursive: true });
+  const git121 = (args, cwd) => execFileSync("git", args, {
+    cwd, encoding: "utf8",
+    env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_SYSTEM: "/dev/null" },
+  });
+  git121(["init", "--quiet", "-b", "main", "."], origin);
+  writeFileSync(join(origin, "a.c"), "int main(void){return 0;}\n");
+  git121(["add", "a.c"], origin);
+  git121(["commit", "--quiet", "-m", "c"], origin);
+  const commit = git121(["rev-parse", "HEAD"], origin).trim();
+  const checkout = join(gitRoot, "pi-context-experiment", "campaign-fixture-121", "runs",
+    "run-1", "repo");
+  mkdirSync(dirname(checkout), { recursive: true });
+  git121(["worktree", "add", "--quiet", "--detach", checkout, commit], origin);
+
+  // THE POINTER IS REAL, and it names the campaign. Asserted first so the removal below is
+  // proved to remove something.
+  const pointer = join(checkout, ".git");
+  assert(existsSync(pointer), "git no longer writes a .git pointer, so this gate proves nothing");
+  const pointerText = readFileSync(pointer, "utf8");
+  assert(/^gitdir:/.test(pointerText.trim()),
+    "the worktree pointer is not a gitdir file, so its disclosure has changed shape");
+  assert(pointerText.includes("pi-context-experiment") &&
+    pointerText.includes("campaign-fixture-121"),
+  "the fixture pointer does not name its own campaign, so it is not the disclosure under test");
+  assert(existsSync(join(checkout, "a.c")), "the fixture worktree has no corpus in it");
+
+  // What the supervisor does, and what it must leave behind: the corpus, not the pointer.
+  rmSync(pointer, { force: true });
+  assert(!existsSync(pointer), "the worktree pointer survived removal");
+  assert.equal(readFileSync(join(checkout, "a.c"), "utf8"), "int main(void){return 0;}\n",
+    "removing the pointer disturbed the corpus the run grades");
+  // NOTHING under the checkout may name the campaign once the pointer is gone.
+  const named121 = [];
+  const walk121 = (directory) => {
+    for (const name of readdirSync(directory)) {
+      const child = join(directory, name);
+      if (statSync(child).isDirectory()) { walk121(child); continue; }
+      const text = readFileSync(child, "utf8");
+      if (text.includes("pi-context-experiment") || text.includes("campaign-fixture-121")) {
+        named121.push(relative(checkout, child));
+      }
+    }
+  };
+  walk121(checkout);
+  assert.deepEqual(named121, [],
+    `the checkout still names its campaign in: ${named121.join(", ")}`);
+  rmSync(gitRoot, { recursive: true, force: true });
+
+  // And the supervisor actually does it, after the fingerprint that pins the staged corpus.
+  const runner121 = source("scripts/run_pi_context_experiment.mjs");
+  const addAt = runner121.indexOf('"worktree", "add"');
+  const rmAt = runner121.indexOf('rmSync(join(checkoutDir, ".git")', addAt);
+  const fingerprintAt = runner121.indexOf("Run checkout does not reproduce the planned staged corpus", addAt);
+  assert(addAt >= 0 && rmAt > fingerprintAt && fingerprintAt > addAt,
+    "the supervisor does not remove the worktree pointer after pinning the checkout");
+
+  checks.theCheckoutCarriesNoPointerBackToItsCampaign = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 122 - a run's bind sources name nothing about the run.
+//
+// Gate 120 took the run directory out of the namespace and gate 121 took the campaign
+// pointer out of the checkout, and neither closes the channel that states the same facts
+// without opening a single file. bwrap repeats its whole argv at /proc/1/cmdline, and the
+// kernel records every bind WITH ITS SOURCE PATH at /proc/self/mountinfo, which a process
+// may always read about itself. A source under the campaign therefore named the experiment,
+// the campaign id, the arm and the repetition to anything that looked, and no way of naming
+// a mount launders its source: --ro-bind-fd keeps the path out of the argv and mountinfo
+// still records the subtree it resolved to.
+//
+// So the run executes out of an opaque directory and its bind sources are RENAMED into the
+// run directory at seal, once the worker is gone. Two halves, and this gate drives both:
+// nothing in the argv names the run, and the sealed positions are still exactly where every
+// downstream reader has always looked. The first half is proved anti-vacuously against the
+// paths the previous build passed, because an argv assertion that cannot fail is worthless.
+// ---------------------------------------------------------------------------
+{
+  const runDir122 = "/host/runs/ops/pi-context-experiment/sol-20260825/2026-08-25T00-00-00Z-pifold-rep3-abcd1234";
+  const stagingRoot122 = "/opaque/cache/0Kq7Xz";
+  const naming122 = ["pi-context-experiment", "sol-20260825", "pifold", "rep3", "abcd1234"];
+  const sources122 = runBindSources(runDir122, stagingRoot122);
+  assert.deepEqual(Object.keys(sources122.live), Object.keys(sources122.sealed),
+    "the live and sealed bind sources disagree about what a run stages, so a rename has no destination");
+  for (const [key, path] of Object.entries(sources122.live)) {
+    assert(path.startsWith(`${stagingRoot122}/`),
+      `the ${key} bind source is not staged: the model can read where it came from`);
+  }
+  assert.equal(sources122.sealed.checkout, join(runDir122, "repo"));
+  assert.equal(sources122.sealed.session, join(runDir122, "session"));
+  assert.equal(sources122.sealed.sandbox, `${runDir122}.sandbox`);
+
+  const layout122 = {
+    checkoutDir: sources122.live.checkout, sessionDir: sources122.live.session,
+    harnessDir: join(sources122.live.sandbox, "harness"), piRoot: "/host/pi",
+    nodeExecutable: "/host/node", homeDir: join(sources122.live.sandbox, "home"),
+    identityDir: join(sources122.live.sandbox, "identity"),
+    agentDir: join(sources122.live.sandbox, "agent"), authPath: "/host/auth.json",
+    scratchDir: join(sources122.live.sandbox, "scratch"),
+    notesDir: join(sources122.live.sandbox, "notes"),
+  };
+  const staged122 = sandboxArgv(layout122).join(" ");
+  for (const token of naming122) {
+    assert(!staged122.includes(token),
+      `the namespace argv still names ${token}, which is one read of /proc/1/cmdline away`);
+  }
+
+  // ANTI-VACUITY: the same builder given the paths the previous build passed puts every one
+  // of those words back, so the assertion above is testing the relocation and not the shape
+  // of an argv.
+  const unstaged122 = sandboxArgv({
+    ...layout122,
+    checkoutDir: sources122.sealed.checkout, sessionDir: sources122.sealed.session,
+    harnessDir: join(sources122.sealed.sandbox, "harness"),
+    homeDir: join(sources122.sealed.sandbox, "home"),
+    identityDir: join(sources122.sealed.sandbox, "identity"),
+    agentDir: join(sources122.sealed.sandbox, "agent"),
+    scratchDir: join(sources122.sealed.sandbox, "scratch"),
+    notesDir: join(sources122.sealed.sandbox, "notes"),
+  }).join(" ");
+  for (const token of naming122) {
+    assert(unstaged122.includes(token),
+      `an unstaged argv does not name ${token}, so this gate proves nothing about staging`);
+  }
+
+  // THE RELOCATION COMPOSES WITH EVERY READER DOWNSTREAM. A rename that lands somewhere the
+  // adjudicator does not look loses the run's evidence silently, which is the whole risk
+  // this half exists to cover, so the fixture is moved for real and then read through the
+  // same definitions the adjudicator uses rather than through its own string joins.
+  const root122 = mkdtempSync(join(tmpdir(), "pi-fold-staging-"));
+  const liveRun122 = join(root122, "run");
+  const liveStaging122 = join(root122, "0Kq7Xz");
+  const moved122 = runBindSources(liveRun122, liveStaging122);
+  mkdirSync(liveRun122, { recursive: true });
+  mkdirSync(moved122.live.checkout, { recursive: true });
+  mkdirSync(moved122.live.session, { recursive: true });
+  writeFileSync(join(moved122.live.checkout, "a.c"), "int main(void){return 0;}\n");
+  writeFileSync(join(moved122.live.session, "s-1.jsonl"), "{}\n");
+  for (const tree of modelWritableTrees(moved122.live.sandbox)) {
+    mkdirSync(tree, { recursive: true });
+    writeFileSync(join(tree, "note.md"), `${basename(tree)}\n`);
+  }
+  for (const key of Object.keys(moved122.live)) {
+    renameSync(moved122.live[key], moved122.sealed[key]);
+  }
+  rmSync(liveStaging122, { recursive: true, force: true });
+
+  assert.equal(readFileSync(join(liveRun122, "repo", "a.c"), "utf8"), "int main(void){return 0;}\n",
+    "the graded corpus is not where the adjudicator reads a sealed checkout");
+  const session122 = hostSessionFile(liveRun122, `${SANDBOX_PATHS.session}/s-1.jsonl`);
+  assert(existsSync(session122),
+    "the session file is not where hostSessionFile resolves it, so no sweep can read the run");
+  assert(session122.startsWith(`${liveRun122}/`),
+    "the session landed outside the run directory the seal addresses relatively");
+  assert.deepEqual(
+    modelWrittenFiles(...modelWritableTrees(moved122.sealed.sandbox)).map((file) => file.path),
+    [`${SANDBOX_PATHS.home}/note.md`, `${SANDBOX_PATHS.scratch}/note.md`,
+      `${SANDBOX_PATHS.notes}/note.md`],
+    "the write audit cannot see what the model wrote once the sandbox tree is sealed");
+  rmSync(root122, { recursive: true, force: true });
+
+  // And the supervisor is still built this way: it renames from the pairing rather than by
+  // hand, so a bind source added to one half and not the other cannot quietly stay behind,
+  // and it drops the forwarding address it leaves for a SIGKILL only after the move lands.
+  const runner122 = source("scripts/run_pi_context_experiment.mjs");
+  assert(runner122.includes("renameSync(bindSources.live[key], bindSources.sealed[key])"),
+    "the supervisor no longer relocates its bind sources from the one definition of where they go");
+  const movedAt122 = runner122.indexOf("renameSync(bindSources.live[key]");
+  assert(runner122.indexOf("unlinkSync(stagingPointer)", movedAt122) > movedAt122,
+    "the staging pointer is dropped before the move lands, so a killed run cannot be found");
+
+  checks.aRunsBindSourcesNameNothingAboutTheRun = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 123 - a cross-reference ask is drawn from the corpus, not from a deleted instrument.
+//
+// The de-priming deletion (e656ff0) removed the audit trace chains, and crossref read its
+// relation off their INC links. Nothing noticed, because the suite only ever built what the
+// current builder makes and smoke mode does not seat crossref: FULL MODE COULD NOT STAGE AT
+// ALL from that commit until this one, dying at "No include hops exist to build a
+// cross-reference index" before writing a plan. The only full plan on disk was staged before
+// the deletion and is unusable for the opposite reason, so the campaign had no launchable
+// plan in either direction.
+//
+// The relation never needed a chain: "this file's include of X resolves to Y" is a property
+// of the checkout. A plan now states its own hops and an ask draws from the ones inside its
+// own window. And the hop is the file's MOST SPECIFIC dependency rather than its first,
+// because a C file opens with the project setup header: taking the first resolvable include
+// made `lib/curl_setup.h` the truth of five fields out of six, and an ask answerable by
+// noticing that pattern measures neither recall nor re-derivation, which is the one
+// discrimination crossref exists to provide.
+// ---------------------------------------------------------------------------
+{
+  const artifacts123 = await import(pathToFileURL(join(PROJECT, "scripts", "lib",
+    "pi_context_artifacts.mjs")));
+  const seeds123 = JSON.parse(readFileSync(
+    join(PROJECT, "docs", "fold_vs_compaction", "hidden-mass-seeds.json"), "utf8"));
+
+  // THE RULE, driven on its own. Every file includes the shared setup header and one header
+  // of its own, and the shared one is what a first-resolvable rule would seat every time.
+  // The specific dependency wins over the ubiquitous one. The specific header deliberately
+  // does NOT share the subject's stem, because a twin is excluded outright (see below) and
+  // a fixture built on one would prove the wrong thing.
+  const resolved123 = ["a", "b", "c", "d"].map((name, index) => ({
+    stage: index + 2,
+    input: `lib/${name}.c`,
+    targets: ["lib/setup.h", `lib/spec_${name}.h`],
+  }));
+  const hops123 = artifacts123.rarestIncludeHops(resolved123);
+  assert.deepEqual(hops123.map((hop) => hop.truth),
+    ["lib/spec_a.h", "lib/spec_b.h", "lib/spec_c.h", "lib/spec_d.h"],
+    "the hop is the file's ubiquitous include rather than its most specific dependency");
+  assert.deepEqual(artifacts123.rarestIncludeHops([{ stage: 1, input: "lib/x.c", targets: [] }]), [],
+    "a file with no resolvable include still contributes a hop, whose truth is undefined");
+  // Ties break on the order the file states them in, so the rule is total rather than
+  // dependent on Map iteration order for equally rare targets.
+  assert.equal(artifacts123.rarestIncludeHops(
+    [{ stage: 1, input: "lib/t.c", targets: ["lib/first.h", "lib/second.h"] }])[0].truth,
+  "lib/first.h", "equally rare targets do not break on the order the file states them in");
+  assert.deepEqual(artifacts123.rarestIncludeHops(
+    [{ stage: 1, input: "lib/only.c", targets: ["lib/only.h"] }]), [],
+  "a file whose only resolvable include is its own twin still contributes a hop");
+
+  const stages123 = [];
+  for (let ordinal = 1; ordinal <= 24; ordinal += 1) {
+    stages123.push({
+      ordinal,
+      kind: "read",
+      files: [{ path: `lib/g${ordinal}a.c`, lines: 10 }, { path: `lib/g${ordinal}b.c`, lines: 10 }],
+    });
+  }
+  // Each subject carries the ubiquitous header plus ONE dependency of its own that does not
+  // share its stem, which is the shape a healthy corpus has: the twin is excluded outright
+  // and the shared header loses to the specific one, so every subject seats a distinct truth.
+  const includeHops123 = artifacts123.rarestIncludeHops(stages123.flatMap((stage) =>
+    stage.files.map((file) => ({
+      stage: stage.ordinal,
+      input: file.path,
+      targets: ["lib/shared.h", `lib/dep_${file.path.slice(4, -2)}.h`],
+    }))));
+  const inputs123 = {
+    stages: stages123, chains: [], includeHops: includeHops123,
+    contentSeed: seeds123.contentSeed, querySeed: seeds123.querySeed, fieldCount: 4,
+  };
+
+  // THE CASE THAT COULD NOT BE STAGED: no chains at all, and a crossref ask is seated.
+  const built123 = artifacts123.buildStaleArtifacts({ ...inputs123, schemas: ["crossref"] });
+  const ask123 = built123.find((ask) => ask.schema === "crossref");
+  assert(ask123 !== undefined, "a plan with no chains cannot seat a cross-reference ask");
+  assert.equal(ask123.fields.length, 4, "the cross-reference ask did not seat its fields");
+  assert.equal(new Set(ask123.fields.map((field) => field.key)).size, ask123.fields.length,
+    "a cross-reference ask asks about the same file twice, so one line contradicts the other");
+  assert(ask123.fields.every((field) => field.stale !== field.truth),
+    "a cross-reference field is planted with its own truth, so nothing is stale to correct");
+  assert(ask123.fields.every((field) => field.rederivable === true),
+    "cross-reference fields stopped being marked re-derivable, and the control pools with recall");
+  // EVERY SUBJECT IS MATERIAL THE MODEL WAS GIVEN, inside this ask's own window. The chain
+  // path could not state that: it drew from every chain in the plan regardless of window.
+  const window123 = new Set(ask123.window);
+  assert(ask123.fields.every((field) =>
+    includeHops123.some((hop) => hop.input === field.key && window123.has(hop.stage))),
+  "a cross-reference subject was never delivered inside the window the ask covers");
+  // Determinism, the same discipline the other schemas are held to.
+  assert.equal(
+    artifacts123.staleArtifactsDigest(built123),
+    artifacts123.staleArtifactsDigest(
+      artifacts123.buildStaleArtifacts({ ...inputs123, schemas: ["crossref"] })),
+    "the same seeds do not regenerate the same cross-reference ask");
+  artifacts123.validateStaleArtifacts({ ...inputs123, artifacts: built123 });
+
+  // ANTI-VACUITY: this is exactly the state full mode was left in, and it must still refuse
+  // rather than seat a thinner ask. Without it the gate above passes on a builder that
+  // silently tolerates having nothing to ask about.
+  assert.throws(
+    () => artifacts123.buildStaleArtifacts({
+      ...inputs123, includeHops: [], chains: [], schemas: ["crossref"],
+    }),
+    /No include hops exist to build a cross-reference index/,
+    "a plan with neither hops nor chains seated a cross-reference ask out of nothing");
+
+  // AND A SEALED PLAN IS READ AS IT WAS. It carries chains and no hops, so the ask comes off
+  // the INC links, unwindowed, exactly as it did when it was sealed: windowing them would
+  // regenerate a different ask and refuse every sealed plan as drift against itself.
+  const sealed123 = artifacts123.buildStaleArtifacts({
+    ...inputs123,
+    includeHops: undefined,
+    chains: [{
+      id: "trace-a",
+      links: [
+        { index: 1, stage: 3, hop: "INC", input: "lib/g3a.c", expectedAnswer: "lib/g5a.c" },
+        { index: 2, stage: 9, hop: "INC", input: "lib/g9a.c", expectedAnswer: "lib/g11a.c" },
+        { index: 3, stage: 15, hop: "INC", input: "lib/g15a.c", expectedAnswer: "lib/g17a.c" },
+        { index: 4, stage: 21, hop: "SOF", input: "lib/g21a.c", expectedAnswer: 1 },
+      ],
+    }],
+    schemas: ["crossref"],
+  }).find((ask) => ask.schema === "crossref");
+  assert.deepEqual([...sealed123.fields.map((field) => field.key)].sort(),
+    ["lib/g15a.c", "lib/g3a.c", "lib/g9a.c"],
+    "a sealed plan's cross-reference ask no longer comes off its own chain links");
+  assert(sealed123.fields.every((field) => field.truth !== undefined),
+    "a sealed chain hop lost the expected answer it was sealed with");
+
+  // THE ASK MUST NOT BE ANSWERABLE WITHOUT CONSULTING THE MATERIAL (2026-08-26). Two
+  // derivation rules failed this in a row and the second was caught LIVE, at stage 16 of a
+  // paid 64-stage run: "first resolvable include" seated `lib/curl_setup.h` five times of
+  // six, and "rarest target" seated the subject's own same-stem twin 39.5% of the time, so
+  // BOTH arms returned byte-identical notes answering `X.c -> X.h` on every field and
+  // scored exactly the two the twin rule predicts, residual ZERO. Neither arm opened
+  // anything. A third rule would fail a third way, so the gate pins the PROPERTY and not
+  // the mechanism: whatever the derivation hands over, a seated ask must defeat both blind
+  // strategies. Same-stem twin scores 0 because twins never become hops; any single
+  // constant scores at most 1 because truths are seated at most once.
+  const stem123 = (path) => String(path).replace(/^.*\//, "").replace(/\.[^.]+$/, "");
+  assert.equal(ask123.fields.filter((field) => stem123(field.key) === stem123(field.truth)).length, 0,
+    "a cross-reference answer is derivable from the subject's own filename");
+  const truths123 = ask123.fields.map((field) => String(field.truth));
+  assert.equal(new Set(truths123).size, truths123.length,
+    "a cross-reference truth is seated twice, so one constant answer scores more than one field");
+
+  // ANTI-VACUITY FOR BOTH HALVES, driven against the exact corpus shapes that broke it.
+  // Every file here includes a ubiquitous setup header AND its own twin, which is what curl
+  // looks like, so a derivation that keeps either would be caught.
+  const shaped123 = ["a", "b", "c", "d", "e", "f", "g", "h"].map((name, index) => ({
+    stage: index + 2,
+    input: `lib/${name}.c`,
+    targets: ["lib/curl_setup.h", `lib/${name}.h`, `lib/spec_${name}.h`],
+  }));
+  const shapedHops123 = artifacts123.rarestIncludeHops(shaped123);
+  assert.equal(shapedHops123.filter((hop) => stem123(hop.input) === stem123(hop.truth)).length, 0,
+    "the hop rule still seats a subject's own twin as its answer");
+  assert.equal(shapedHops123.filter((hop) => hop.truth === "lib/curl_setup.h").length, 0,
+    "the hop rule still seats the corpus's ubiquitous header over a specific dependency");
+  // And a derivation that DID hand over one repeated truth cannot ship at all. Eight
+  // subjects resolving to the same header seat exactly one field once truths are distinct,
+  // which is below ARTIFACT_MIN_FIELDS, so staging REFUSES BY NAME rather than shipping an
+  // ask a constant answer would ace. That is the stronger outcome: the degenerate corpus
+  // stops the campaign instead of quietly producing a measurement worth nothing.
+  assert.throws(
+    () => artifacts123.buildStaleArtifacts({
+      ...inputs123, fieldCount: 6,
+      includeHops: ["a", "b", "c", "d", "e", "f", "g", "h"].map((name, index) => ({
+        stage: index + 2, input: `lib/g${index + 2}a.c`, truth: "lib/one.h",
+      })),
+      schemas: ["crossref"],
+    }),
+    /seats 1 fields, below the floor of 2/,
+    "eight subjects sharing one truth shipped an ask instead of refusing to stage");
+
+  // The plan shape carries the field, and a plan without it is still a plan: every sealed
+  // campaign predates it and must keep validating, which is the same law `ledger`,
+  // `staleArtifacts` and `endBlockAdjacency` are already held to.
+  const planShape123 = source("scripts/lib/pi_context_experiment.mjs");
+  assert(planShape123.includes(
+    '["ledger", "staleArtifacts", "endBlockAdjacency", "includeHops"]'),
+  "the plan shape refuses the include hops a current plan records");
+
+  checks.aCrossReferenceAskIsDrawnFromTheCorpus = true;
+}
+
+// ---------------------------------------------------------------------------
+// GATE 124 - a decorated answer is graded on its value, not its markdown.
+//
+// The parser's contract is LENIENT ON SHAPE, STRICT ON VALUE, and sol-20260826-full2
+// rep 3 found two shapes the leniency did not cover. It wrote every cross-reference row
+// as [`path`](../path) -> [`path`](../path), so the link syntax became part of the key
+// and six answered values graded missing; and it rewrote every worklog line as
+// "path: why it sits here" in the TRUE order, so the whole sentence became the key and a
+// substantively perfect reordering graded missing x6. Both are formatting, and the
+// grade's job is memory. The fix unwraps inline markdown decoration (links, emphasis
+// around a whole token) in clean(), and reduces an annotated worklog entry to its
+// leading token after the abstention marker is lifted.
+//
+// What the leniency must NOT do is soften values: a crossref value carrying trailing
+// prose is still a wrong value, a prose-first worklog line still names no planted entry,
+// and an abstention annotated onto an annotated entry still grades abstained.
+// ---------------------------------------------------------------------------
+{
+  const artifacts = await import(pathToFileURL(join(PROJECT, "scripts", "lib", "pi_context_artifacts.mjs")));
+
+  // The exact crossref shape rep 3 wrote: linked, backticked, one value annotated.
+  const xref = artifacts.parseStaleArtifact({
+    schema: "crossref",
+    text: [
+      "# Cross-reference index", "",
+      "- [`lib/a.c`](../lib/a.c) → [`lib/a.h`](../lib/a.h)",
+      "- [`lib/b.c`](../lib/b.c) -> [`lib/z.h`](../lib/z.h)",
+      "- [`lib/c.c`](../lib/c.c) -> [`lib/c.h`](../lib/c.h) (annotated; the note rides the value)",
+      "",
+    ].join("\n"),
+  });
+  assert.equal(xref["lib/a.c"], "lib/a.h", "a markdown-linked key or value is graded on its markdown");
+  assert.equal(xref["lib/b.c"], "lib/z.h", "unwrapping decoration bent the value itself");
+  const xrefGrade = artifacts.gradeStaleArtifact({
+    ask: {
+      id: "af-x", schema: "crossref", rederivable: true,
+      fields: [
+        { key: "lib/a.c", truth: "lib/a.h", stale: "lib/q.h", rederivable: true },
+        { key: "lib/b.c", truth: "lib/b.h", stale: "lib/z.h", rederivable: true },
+        { key: "lib/c.c", truth: "lib/c.h", stale: "lib/y.h", rederivable: true },
+      ],
+    },
+    returned: xref,
+  });
+  assert.equal(xrefGrade.corrected, 1, "a linked answer restoring the truth is not counted as a correction");
+  assert.equal(xrefGrade.stale, 1, "a linked answer left as planted is not counted as stale");
+  assert.equal(xrefGrade.confabulated, 1,
+    "a value carrying trailing prose is forgiven, so shape leniency has softened values");
+  assert.equal(xrefGrade.missing, 0, "a decorated key still grades missing");
+
+  // The exact worklog shape rep 3 wrote: annotated entries, true order, prose after a
+  // colon. One entry additionally carries the abstention marker inside its annotation,
+  // and one line is prose-first, which must keep missing its planted entry.
+  const wlog = artifacts.parseStaleArtifact({
+    schema: "worklog",
+    text: [
+      "# Worklog", "",
+      "- `lib/a.c`: reviewed first as the portability contract.",
+      "- `lib/b.c`: reviewed next; mapped the option table.",
+      "- `lib/c.c`: could not place this one (unverified)",
+      "- **lib/d.c** reviewed with the socket group.",
+      "- reviewed the vauth group at some point too.",
+      "",
+    ].join("\n"),
+  });
+  assert.equal(wlog["lib/a.c"], 1, "an annotated entry is graded on its whole sentence");
+  assert.equal(wlog["lib/b.c"], 2, "reducing one annotated entry shifted another's position");
+  assert.equal(wlog["lib/c.c"], artifacts.ARTIFACT_UNVERIFIED,
+    "an abstention marker inside an annotation is read as a position");
+  assert.equal(wlog["lib/d.c"], 4, "an emphasis-wrapped entry is graded on its asterisks");
+  assert.equal(Object.hasOwn(wlog, "lib/a.c: reviewed first as the portability contract."), false,
+    "the sentence key survives beside the reduced one");
+  const wlogGrade = artifacts.gradeStaleArtifact({
+    ask: {
+      id: "af-w", schema: "worklog", rederivable: false,
+      fields: [
+        { key: "lib/a.c", truth: 1, stale: 3, rederivable: false },
+        { key: "lib/b.c", truth: 2, stale: 1, rederivable: false },
+        { key: "lib/e.c", truth: 5, stale: 2, rederivable: false },
+      ],
+    },
+    returned: wlog,
+  });
+  assert.equal(wlogGrade.corrected, 2, "an annotated entry in the true order is not counted as a correction");
+  assert.equal(wlogGrade.missing, 1,
+    "a prose-first line was matched to a planted entry, so the reduction is guessing");
+
+  // A bare, undecorated artifact parses exactly as it always did: the planted rendering
+  // round-trips byte-for-byte through the lenient parser, so the leniency cost nothing.
+  const ask = {
+    id: "af-r", schema: "worklog", rederivable: false,
+    fields: [
+      { key: "lib/a.c", truth: 2, stale: 1, rederivable: false },
+      { key: "lib/b.c", truth: 1, stale: 2, rederivable: false },
+    ],
+  };
+  const untouched = artifacts.parseStaleArtifact({
+    schema: "worklog", text: artifacts.renderStaleArtifact(ask),
+  });
+  assert.deepEqual(untouched, { "lib/a.c": 1, "lib/b.c": 2 },
+    "the planted rendering no longer parses back to the planted order");
+
+  checks.aDecoratedAnswerIsGradedOnItsValues = true;
+}
+
+process.stdout.write(`PASS pi-context-experiment verification: ${Object.keys(checks).length} gates\n`);

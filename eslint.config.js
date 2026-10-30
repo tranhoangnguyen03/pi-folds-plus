@@ -1,0 +1,74 @@
+import js from "@eslint/js";
+import stylistic from "@stylistic/eslint-plugin";
+import tseslint from "@typescript-eslint/eslint-plugin";
+import tsParser from "@typescript-eslint/parser";
+import globals from "globals";
+
+export default [
+  {
+    ignores: [
+      "node_modules/**",
+      // Gitignored workspace: deposit copies and vendored d3 for the paper
+      // figures live here, and none of it is package or harness source.
+      "lab/**",
+      // Adopted 2026-08-07 from the quorum repo, where they were never linted
+      // (quorum is a Python project). They are the measurement harness for the
+      // fold-vs-compaction study, not package source — nothing here ships to
+      // npm, since package.json `files` is [extensions, README.md, LICENSE].
+      // Ignored rather than conformed so the move stayed verbatim: `npm run
+      // lint` keeps meaning "the package is clean" instead of going red on
+      // 18 pre-existing unused-variable findings in imported code. Drop this
+      // entry once the harness is conformed. tests/ is deliberately NOT here:
+      // verify.mjs is the contract, it predates the adoption, and it lints clean.
+      "scripts/**",
+      // A SEPARATE PACKAGE WITH ITS OWN CONVENTIONS (2026-08-30). dsh-fold is the
+      // DeepSeek Harness plugin: `lib/**` is compiled output (.js/.d.ts/.map), and
+      // its own source writes single quotes where this config demands double. It is
+      // not pi-fold source and nothing here ships in pi-fold's npm `files`.
+      //
+      // `src/core` MUST be ignored for a second and stronger reason: gate 164 pins it
+      // byte for byte against extensions/lib, and the ORIGINAL is linted as part of
+      // extensions/, so ignoring the copy loses no coverage at all. Linting it here
+      // instead would put this config in direct conflict with that gate, since any
+      // fix applied to the copy is a byte the gate requires it not to have.
+      "dsh-fold/**",
+    ],
+  },
+  js.configs.recommended,
+  {
+    files: ["**/*.{js,mjs,ts}"],
+    languageOptions: {
+      ecmaVersion: "latest",
+      sourceType: "module",
+      globals: globals.node,
+    },
+    plugins: {
+      "@stylistic": stylistic,
+    },
+    rules: {
+      "no-control-regex": "off",
+      "no-empty": ["error", { allowEmptyCatch: true }],
+      "no-unused-vars": ["error", { args: "none" }],
+      "no-useless-assignment": "off",
+      "@stylistic/eol-last": ["error", "always"],
+      "@stylistic/no-multiple-empty-lines": ["error", { max: 1, maxBOF: 0, maxEOF: 0 }],
+      "@stylistic/no-trailing-spaces": "error",
+      "@stylistic/quotes": ["error", "double", { avoidEscape: true }],
+      "@stylistic/semi": ["error", "always"],
+    },
+  },
+  {
+    files: ["**/*.ts"],
+    plugins: {
+      "@typescript-eslint": tseslint,
+    },
+    languageOptions: {
+      parser: tsParser,
+    },
+    rules: {
+      "no-undef": "off",
+      "no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": "error",
+    },
+  },
+];

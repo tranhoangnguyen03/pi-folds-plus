@@ -1,0 +1,16 @@
+node_modules/
+*.log
+
+# Private project workspace layer — never part of the public package
+.claude/
+.codex/
+.pi/
+.agents/
+.mcp.json
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+lab/
+memory/
+*.local.*
+__pycache__/
