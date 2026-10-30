@@ -1,0 +1,24 @@
+name: Development workspace
+on:
+  workflow_dispatch:
+  push:
+    branches: [work/context-foundation]
+    paths: [.github/workflows/dev-export.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - name: Package source and installed test dependencies
+        run: tar -czf /tmp/pi-folds-workspace.tar.gz extensions tests scripts docs package.json package-lock.json eslint.config.js node_modules dev README.md
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pi-folds-workspace
+          path: /tmp/pi-folds-workspace.tar.gz
+          retention-days: 1
