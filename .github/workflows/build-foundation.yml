@@ -1,0 +1,48 @@
+name: Foundation integration
+on:
+  push:
+    branches: [work/context-foundation]
+    paths:
+      - dev/build-foundation.py
+      - .github/workflows/build-foundation.yml
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: foundation-integration
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: work/context-foundation
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Apply reviewed source integration
+        run: python3 dev/build-foundation.py
+      - name: Commit source integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add extensions package.json package-lock.json README.md
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: integrate explicit visibility and near-commit planning'
+            git push origin HEAD:work/context-foundation
+          fi
+      - run: npm ci
+      - name: Focused runtime tests
+        run: npm run test:plus
+      - name: Lint
+        if: always()
+        run: npm run lint
+      - name: Install measured host for upstream regression tests
+        run: |
+          pi_version="$(node -p "require('./package-lock.json').packages['node_modules/@earendil-works/pi-coding-agent'].version")"
+          npm install --global --prefix "$HOME/.npm-global" "@earendil-works/pi-coding-agent@$pi_version" --ignore-scripts --no-audit --no-fund
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Upstream regression suite
+        run: npm test
