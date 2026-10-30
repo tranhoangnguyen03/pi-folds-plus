@@ -19,4 +19,4 @@ Open a PR for that sync. Resolve the Plus integration points in `active-context.
 
 Runtime entry types and `pi_fold_context` retain upstream identities so existing session evidence stays readable. Run either pi-fold or Pi Folds Plus, not both copies in the same Pi process. Package naming distinguishes installation without renaming stored evidence.
 
-The bootstrap workflow imports the baseline only when the repository has no runtime code. Once imported, it makes no changes.
+The baseline import is complete. Its one-time bootstrap and development workflows have been removed; subsequent syncs use reviewed merges and the normal read-only CI workflow.
