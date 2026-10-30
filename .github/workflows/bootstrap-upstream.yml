@@ -28,6 +28,7 @@ jobs:
           git remote add upstream https://github.com/shaneconner/fold.git
           git fetch --no-tags upstream 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664
           git merge --no-ff --allow-unrelated-histories FETCH_HEAD -m 'chore: import pi-fold 4.3.0 and its upstream history'
-          git branch upstream/pi-fold-4.3.0 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664
-          git push origin HEAD:main upstream/pi-fold-4.3.0
+          # Workflow files are installed via the connector before this import;
+          # the Actions token only fast-forwards repository contents here.
+          git push origin HEAD:main
           echo 'Imported audited upstream history without replacing the repository or its issues.' >> "$GITHUB_STEP_SUMMARY"
