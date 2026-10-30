@@ -6,9 +6,12 @@ on:
     paths: [.github/workflows/dev-export.yml]
 permissions:
   contents: read
+concurrency:
+  group: dev-workspace
+  cancel-in-progress: true
 jobs:
   export:
-    runs-on: ubuntu-22.04
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,11 +19,12 @@ jobs:
           node-version: 22
       - run: npm ci
       - name: Package source and installed test dependencies
+        shell: bash
         run: |
           git rev-parse HEAD > source-revision.txt
-          tar -czf /tmp/pi-folds-workspace.tar.gz extensions tests scripts docs package.json package-lock.json eslint.config.js node_modules dev README.md source-revision.txt
+          tar -czf workspace.tar.gz extensions tests scripts docs package.json package-lock.json eslint.config.js node_modules dev README.md source-revision.txt
       - uses: actions/upload-artifact@v4
         with:
           name: pi-folds-workspace
-          path: /tmp/pi-folds-workspace.tar.gz
+          path: workspace.tar.gz
           retention-days: 1
