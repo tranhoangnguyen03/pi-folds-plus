@@ -1,0 +1,33 @@
+name: Bootstrap upstream history
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/bootstrap-upstream.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency: bootstrap-upstream
+jobs:
+  import:
+    if: github.repository == 'tranhoangnguyen03/pi-folds-plus'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Import the audited upstream revision once
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git cat-file -e HEAD:extensions/active-context.ts 2>/dev/null; then
+            echo 'Upstream already imported; no changes.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/shaneconner/fold.git
+          git fetch --no-tags upstream 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664
+          git merge --no-ff --allow-unrelated-histories FETCH_HEAD -m 'chore: import pi-fold 4.3.0 and its upstream history'
+          git branch upstream/pi-fold-4.3.0 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664
+          git push origin HEAD:main upstream/pi-fold-4.3.0
+          echo 'Imported audited upstream history without replacing the repository or its issues.' >> "$GITHUB_STEP_SUMMARY"
