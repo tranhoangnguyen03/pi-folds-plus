@@ -386,6 +386,16 @@ export function explicitProtectedKeys(state: ActiveContextState): Set<string> {
  * differing only in which protected set it consulted; the two sets collapsed into one when
  * fresh-tail was deleted, and the two functions were byte-identical after that.
  */
+export function refsStructurallyProtected(
+  refs: EvidenceRef[],
+  snapshot: ActiveContextSnapshot,
+): boolean {
+  return refs.some((ref) => {
+    const item = exactMapped(snapshot, ref);
+    return !item || snapshot.protectedIndices.has(item.index);
+  });
+}
+
 export function refsProtected(
   refs: EvidenceRef[],
   state: ActiveContextState,

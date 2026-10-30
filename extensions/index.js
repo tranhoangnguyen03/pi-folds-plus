@@ -11,7 +11,7 @@ export {
 
 const PUBLIC_OPTIONS = Object.freeze([
   "thresholds", "providerInputBudget", "blacklistAutoFoldTools", "toolFoldThreshold",
-  "preCommitNotice", "noticeLeadShare", "palette",
+  "preCommitNotice", "noticeLeadShare", "palette", "retention",
 ]);
 
 const GENERATOR_DELETED = "the model brief generator is deleted (2026-08-14): across 15 sealed " +

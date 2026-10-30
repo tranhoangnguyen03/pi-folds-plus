@@ -1,7 +1,7 @@
 {
-  "name": "pi-fold",
-  "version": "4.3.0",
-  "description": "Lossless context folding for the Pi coding agent: only the oldest context changes; the fresh window stays untouched.",
+  "name": "pi-folds-plus",
+  "version": "0.1.0-alpha.0",
+  "description": "Pi context folding with explicit visibility controls and a near-commit retention planner.",
   "keywords": [
     "pi-package",
     "pi",
@@ -18,10 +18,10 @@
   "private": false,
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/shaneconner/fold.git"
+    "url": "git+https://github.com/tranhoangnguyen03/pi-folds-plus.git"
   },
-  "bugs": "https://github.com/shaneconner/fold/issues",
-  "homepage": "https://github.com/shaneconner/fold#readme",
+  "bugs": "https://github.com/tranhoangnguyen03/pi-folds-plus/issues",
+  "homepage": "https://github.com/tranhoangnguyen03/pi-folds-plus#readme",
   "author": "Shane Conner",
   "license": "MIT",
   "files": [
@@ -34,7 +34,8 @@
   },
   "scripts": {
     "lint": "eslint . --max-warnings 0",
-    "test": "node tests/verify.mjs"
+    "test": "node tests/verify.mjs",
+    "test:plus": "node --test tests/plus-foundation.mjs"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

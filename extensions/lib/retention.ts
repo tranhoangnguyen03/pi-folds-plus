@@ -102,7 +102,10 @@ export class RetentionAssessment {
     const controller = new AbortController();
     this.controller = controller;
     const candidates = new Map(request.candidates.map((candidate) => [candidate.id, { ...candidate }]));
-    void Promise.resolve().then(() => this.service!.assess(request, controller.signal)).then((rows) => {
+    void Promise.resolve().then(() => {
+      if (controller.signal.aborted || epoch !== this.epoch || !this.enabled()) return [];
+      return this.service!.assess(request, controller.signal);
+    }).then((rows) => {
       if (controller.signal.aborted || epoch !== this.epoch || this.key !== request.key || !this.enabled()) return;
       if (!Array.isArray(rows)) throw new Error("Decision backend returned no judgment array");
       const seen = new Set<string>();

@@ -29,6 +29,7 @@ import {
   orderedRoots,
   refsInOrder,
   refsProtected,
+  refsStructurallyProtected,
 } from "./measurement.ts";
 import {
   assertFoldForestValid,
@@ -84,6 +85,7 @@ import {
   selectAutomaticToolBatch,
 } from "./selection.ts";
 import { staleSpanMatureEnd } from "./transcript.ts";
+import { preserveProtectedInclusion, restoreProtectedSources } from "./visibility.ts";
 
 export function selectAutomaticChapter(
   snapshot: ActiveContextSnapshot,
@@ -696,6 +698,10 @@ export function setFoldProjectionState(
     expanded.add(id);
     for (const descendant of descendantIds(state, id)) expanded.delete(descendant);
   } else {
+    const protectedKeys = new Set(state.protected.map(objectRefKey));
+    if (flattenFoldRefs(fold, state).some((ref) => protectedKeys.has(objectRefKey(ref)))) {
+      throw new Error(`Release the keep on ${id} before refolding it`);
+    }
     expanded.delete(id);
     for (const descendant of descendantIds(state, id)) expanded.delete(descendant);
   }
@@ -730,6 +736,8 @@ export function protectEvidence(
   ids: string[],
   protect: boolean,
 ): ActiveContextState {
+  // Preserve legacy inclusion before changing protection.
+  state = preserveProtectedInclusion(state);
   const refs = ids.flatMap((id) => {
     const fold = state.folds.find((item) => item.id === id);
     if (fold) return flattenFoldRefs(requireActiveFold(snapshot, state, id), state);
@@ -746,7 +754,7 @@ export function protectEvidence(
     );
   }
   return clearPrepared({
-    ...state,
+    ...(protect ? restoreProtectedSources(snapshot, state, ids) : state),
     revision: state.revision + 1,
     protected: [...byKey.values()],
   });
@@ -793,7 +801,7 @@ export function renderFold(
   const refs = flattenFoldRefs(fold, state);
   const indices = refsInOrder(snapshot, refs);
   if (!indices) return null;
-  const mustReveal = state.expanded.includes(fold.id) || (refsProtected(refs, state, snapshot));
+  const mustReveal = state.expanded.includes(fold.id) || refsStructurallyProtected(refs, snapshot);
   if (!mustReveal) {
     const first = snapshot.messages[indices[0]] as Record<string, unknown>;
     const text = foldPlaceholder(fold, state, snapshot);
@@ -996,6 +1004,42 @@ function applyToolClips(
   }
 }
 
+export type FoldPresentation = "original" | "clipped" | "folded" | "mixed";
+
+export function foldPresentation(
+  fold: ActiveFold,
+  state: ActiveContextState,
+  snapshot: ActiveContextSnapshot,
+): FoldPresentation {
+  const byId = foldMap(state);
+  const revealed = (item: ActiveFold) => state.expanded.includes(item.id) ||
+    refsStructurallyProtected(flattenFoldRefs(item, state), snapshot);
+  for (let id = fold.parentId; id;) {
+    const parent = byId.get(id);
+    if (!parent || !revealed(parent)) return "folded";
+    id = parent.parentId;
+  }
+  const clips = new Set((state.clips ?? []).map((clip) => clip.entryId));
+  const states = new Set<FoldPresentation>();
+  const visit = (item: ActiveFold): void => {
+    if (!revealed(item)) { states.add("folded"); return; }
+    for (const part of item.parts) {
+      if (part.kind === "fold") {
+        const child = byId.get(part.foldId);
+        if (child) visit(child);
+      } else {
+        const message = exactMapped(snapshot, part.ref)?.message;
+        const clipped = clips.has(part.ref.entryId) && messageRole(message) === "toolResult" &&
+          typeof ownValue(ownValue(message, "details"), "projection") !== "string" &&
+          contentText(message).length > snapshot.policy.toolClipFloorChars;
+        states.add(clipped ? "clipped" : "original");
+      }
+    }
+  };
+  visit(fold);
+  return states.size === 1 ? [...states][0] : "mixed";
+}
+
 export function foldStatusRow(fold: ActiveFold, state: ActiveContextState, snapshot: ActiveContextSnapshot): Record<string, unknown> {
   const navigation = foldNavigation(fold, state, snapshot);
   const interval = foldInterval(fold, state, snapshot);
@@ -1012,6 +1056,7 @@ export function foldStatusRow(fold: ActiveFold, state: ActiveContextState, snaps
     previous: navigation.previous,
     next: navigation.next,
     state: projection,
+    presentation: foldPresentation(fold, state, snapshot),
     active: Boolean(interval),
     protected: blocked,
     sourceIds,
@@ -1065,6 +1110,7 @@ export function foldTreeDetail(
     brief: foldBrief(fold, state),
     sourceCount: flattenFoldRefs(fold, state).length,
     state: state.expanded.includes(fold.id) ? "expanded" : "folded",
+    presentation: foldPresentation(fold, state, snapshot),
     peekable: true,
   }));
 }
@@ -1084,6 +1130,7 @@ export function foldIndexRow(
     kind: fold.kind,
     depth: foldDepth(state, fold),
     state: state.expanded.includes(fold.id) ? "expanded" : "folded",
+    presentation: foldPresentation(fold, state, snapshot),
     startId: refs[0]?.entryId ?? null,
     endId: refs.at(-1)?.entryId ?? null,
     startPosition: interval?.start ?? null,
@@ -1294,7 +1341,7 @@ export function visibleCollapsedFolds(
   const visit = (fold: ActiveFold): void => {
     const refs = flattenFoldRefs(fold, state);
     if (!foldInterval(fold, state, snapshot)) return;
-    const protectedSource = refsProtected(refs, state, snapshot);
+    const protectedSource = refsStructurallyProtected(refs, snapshot);
     if (!state.expanded.includes(fold.id) && !protectedSource) {
       output.push(fold);
       return;

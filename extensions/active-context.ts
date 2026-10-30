@@ -26,6 +26,7 @@ import {
   encodedFoldSource,
   foldCandidatesDetail,
   foldIndexRow,
+  foldPresentation,
   foldTreeDetail,
   peekFoldSource,
   prepareFold,
@@ -211,6 +212,8 @@ import type {
   ContextEventKind,
   ProjectionChange,
 } from "./lib/instrumentation.ts";
+import { preserveProtectedInclusion, restoreProtectedSources } from "./lib/visibility.ts";
+import { RetentionAssessment, assessmentKey, retentionCandidates, selectCommit, type RetentionService } from "./lib/retention.ts";
 import { buildActiveContextCommands, buildActiveContextTool } from "./lib/tool-surface.ts";
 import { buildFoldEditorData, FoldEditorView } from "./lib/editor-ui.ts";
 import { publishLiveSettings } from "./lib/live-settings.ts";
@@ -298,6 +301,8 @@ export function registerActiveContext(pi: any, options: {
   commandNames?: { status?: string; fold?: string };
   blacklistAutoFoldTools?: ReadonlySet<string>;
   providerInputBudget?: number;
+  /** Adapter seam; backend settings follow in a later milestone. */
+  retention?: RetentionService;
   thresholds?: ActiveContextThresholds;
   /** THE TOOL-CALL DIET's share point (2026-08-24; default 0.50 since 2026-08-28, Shane,
    *  on the sol-20260826-full2 verdict): tool results in the oldest toolFoldThreshold
@@ -341,6 +346,7 @@ export function registerActiveContext(pi: any, options: {
   // pi booted with. They are `let` so the live applier published below can replace them,
   // and every reader takes the variable rather than a copy, so a swap reaches the next
   // snapshot, the next commit decision and the status line without anything else moving.
+  const retention = new RetentionAssessment(options.retention);
   let preCommitNotice = resolvedPreCommitNotice(options.preCommitNotice);
   let noticeLeadShare = resolveNoticeLeadShare(options.noticeLeadShare);
   let toolFoldThreshold = resolvedToolFoldThreshold(options.toolFoldThreshold);
@@ -1400,6 +1406,7 @@ export function registerActiveContext(pi: any, options: {
   });
 
   const load = (ctx: any, preserveThresholdDecision = false, forkedSessionHint = false): void => {
+    retention.reset();
     lifecycle.generation += 1;
     lifecycle.shuttingDown = false;
     cancelPreparation();
@@ -1532,7 +1539,7 @@ export function registerActiveContext(pi: any, options: {
         `${brandNoun} ledger at revision ${durableRestored.revision}. Existing folds and raw history are retained; ` +
         "the next context pass will rebuild eligible folds from that history. Missing ledger changes cannot be replayed.", "warning");
     }
-    persistence.state = durableRestored.prepared ? clearPrepared(durableRestored) : clone(durableRestored);
+    persistence.state = preserveProtectedInclusion(durableRestored.prepared ? clearPrepared(durableRestored) : clone(durableRestored));
     // AN UNREADABLE LINEAGE IS NOT AN EMPTY ONE (2026-09-07). `persistedWireVersion` reads
     // 0 for both, and `persist` writes a CHECKPOINT whenever it is not 2, so a restore that
     // threw put a second checkpoint into a branch that already had one. The reader refuses
@@ -3163,70 +3170,20 @@ export function registerActiveContext(pi: any, options: {
     // deleted (Shane, 2026-08-23, from the first live session): the cut takes stalest
     // first and stops at the aim, so the newest events stay raw exactly as long as there
     // is room for them, in every session shape including one that never closes a turn.
-    let result = await commitPendingMarks({
-      snapshot,
-      state,
-      generation: lifecycle.generation,
-      retainIneligible: true,
+    const selection = await selectCommit({
+      snapshot, state, generation: lifecycle.generation, ordinal,
       ...(backstopFired || waiverRatio !== null ? {} : {
         applyTargetBytes: Math.ceil(freeingTarget * budgetTokens * projectionCharsPerToken()),
       }),
+      clipThreshold: toolFoldThreshold,
+      blacklist: blacklistAutoFoldTools,
+      judgments: retention.judgments(assessmentKey(snapshot, lifecycle.generation), userRequested),
     });
-    for (;;) {
-      // THE CLOSING PASS COMMITS ONLY WHAT IT SEATS (2026-08-23). It rides the same paid
-      // rewrite to give a group its parent, and it runs UNBOUNDED because a parent's whole
-      // span must land together. Handing it the full pending set therefore leaked the depth
-      // cut: the marks the bound had just retained were still pending, the closing commit
-      // carried no bound, and the first band-top commit after the guard deletion folded all
-      // 24 of them to the floor (gate 09's fixture, applied 26 of 24 with deferred 0). The
-      // marks the cut held back are set aside before the closing commit and restored after,
-      // so the only thing an unbounded closing pass can spend is the parents it just made.
-      let closing = result.state;
-      const heldBack = pendingMarks(closing);
-      let seeded = withPendingMarks(closing, []);
-      let seededAdded = 0;
-      for (const mark of consolidationMarks({ snapshot, state: closing, ordinal })) {
-        const addition = addPendingMark(closing, mark);
-        if (!addition.added) continue;
-        closing = addition.state;
-        const carried = addPendingMark(seeded, mark);
-        if (carried.added) { seeded = carried.state; closingAdded += 1; seededAdded += 1; }
-      }
-      if (!seededAdded) break;
-      const closed = await commitPendingMarks({
-        snapshot,
-        state: seeded,
-        generation: lifecycle.generation,
-        retainIneligible: true,
-      });
-      if (!closed.applied.length) break;
-      result = {
-        ...closed,
-        state: withPendingMarks(closed.state, [...pendingMarks(closed.state), ...heldBack]),
-        applied: [...result.applied, ...closed.applied],
-        refused: [...result.refused.filter((mark) => !mark.retained), ...closed.refused],
-        retained: [...result.retained.filter((mark) =>
-          !closed.applied.some((appliedMark) => appliedMark.id === mark.id)), ...closed.retained],
-      };
-    }
-    // THE TOOL-CALL DIET RIDES THE SAME TRANSACTION (2026-08-24): clips are selected
-    // against the post-fold state and land in the same revision the commit minted, so
-    // the one paid rewrite carries both and no non-commit pass ever moves a byte. The
-    // full bytes stay in the transcript behind each clip's entry id.
-    let clippedResults = 0;
-    if (toolFoldThreshold > 0) {
-      const clipAdditions = toolClipAdditions({
-        snapshot,
-        state: result.state,
-        threshold: toolFoldThreshold,
-        blacklist: blacklistAutoFoldTools,
-      });
-      if (clipAdditions.length) {
-        clippedResults = clipAdditions.length;
-        result = { ...result, state: { ...result.state,
-          clips: [...(result.state.clips ?? []), ...clipAdditions] } };
-      }
-    }
+    let result = selection.result;
+    closingAdded += selection.closingAdded;
+    const clippedResults = selection.clippedResults;
+    retention.committed(selection.held);
+
     // A RE-CUT SPAN ADOPTS ITS DURABLE RECORD (persistence.ts, adoptDurableFoldRecords):
     // a fold minted here under an id the store already holds, with the same source, takes
     // the record's bytes before the projection is measured, so the persist path finds
@@ -3270,6 +3227,7 @@ export function registerActiveContext(pi: any, options: {
       refold_marks: refoldAdded,
       consolidation_marks: consolidationAdded,
       closing_consolidation_marks: closingAdded,
+      retention_kept: selection.held.map((item) => item.id),
       absorbed_wedges: wedges.absorbed.length,
       clipped_results: clippedResults,
       adopted_records: adoption.adopted.length,
@@ -3574,6 +3532,7 @@ export function registerActiveContext(pi: any, options: {
   });
 
   const attributionChanged = async (_event: unknown, ctx: any): Promise<void> => {
+    retention.reset();
     lifecycle.generation += 1;
     cancelPreparation();
     if (persistence.state?.prepared) persistence.state = clearPrepared(persistence.state);
@@ -3705,6 +3664,16 @@ export function registerActiveContext(pi: any, options: {
       // neither of their inputs. What it changes is WHEN the agent learns a fold exists,
       // which is now while the material it covers is still in front of it.
       advanceFoldFrontier(snapshot);
+      if (retention.enabled()) {
+        const capacity = servingCapacity(snapshot.contextWindow);
+        retention.observe({
+          key: assessmentKey(snapshot, lifecycle.generation),
+          candidates: retentionCandidates(snapshot, persistence.state!),
+          messages: snapshot.messages,
+        }, capacity.usedTokens === null || capacity.budgetTokens <= 0 ? null : capacity.usedTokens / capacity.budgetTokens,
+        Math.max(0, thresholds.maxTarget - noticeLeadShare), (error) => safeNotify(ctx,
+          `Decision service failed; regular folding continues. ${String(error)}`, "error"));
+      } else retention.reset();
       if (curation.restoreRevisionGap && !ladder.automaticFailure) {
         mutationAttempted = true;
         const action = await attemptAutomaticCommit(snapshot, ctx, "restore-revision-gap", 1);
@@ -4293,34 +4262,31 @@ export function registerActiveContext(pi: any, options: {
     expand: boolean,
     ctx: any,
   ): Promise<unknown[]> => {
+    const before = persistence.state!;
+    let candidate = before;
     let epochApplied: unknown[] = [];
-    if (expand && pendingMarks(persistence.state!).length) {
-      const result = await commitPendingMarks({
-        snapshot,
-        state: persistence.state!,
-        generation: lifecycle.generation,
-        retainIneligible: true,
-      });
-      persistence.state = result.state;
+    if (expand && pendingMarks(candidate).length) {
+      const result = await commitPendingMarks({ snapshot, state: candidate,
+        generation: lifecycle.generation, retainIneligible: true });
+      candidate = result.state;
       epochApplied = result.applied;
     }
-    const expanding = requireActiveFold(snapshot, persistence.state!, id);
+    requireActiveFold(snapshot, candidate, id);
+    let next = setFoldProjectionState(candidate, id, expand ? "expanded" : "folded");
     if (expand) {
-      admit({
-        action: "expand",
-        ctx,
-        foldId: id,
-        requestedBytes: Math.max(0, expanding.sourceChars - expanding.placeholderChars),
-        children: childFoldIds(expanding),
-      });
-    }
-    let next = setFoldProjectionState(persistence.state!, id, expand ? "expanded" : "folded");
-    if (expand) next = withExpandLease(next, id);
-    else {
+      // Preserve one-level expansion while restoring clipped results in that source.
+      const expanded = next.expanded;
+      next = { ...restoreProtectedSources(snapshot, next, [id]), expanded };
+      next = withExpandLease(next, id);
+      const additional = Math.max(0,
+        pricedBytes(projectActiveContext(snapshot, next)) - pricedBytes(projectActiveContext(snapshot, before)));
+      admit({ action: "expand", ctx, foldId: id, requestedBytes: additional, children: [] });
+    } else {
       const leases = { ...next.leases };
       delete leases[id];
       next = { ...next, leases };
     }
+    // Failed admission leaves queued marks and the current projection unchanged.
     await persistManual(next, ctx);
     updateStatus(ctx);
     return epochApplied;
@@ -4351,7 +4317,21 @@ export function registerActiveContext(pi: any, options: {
           "folding keeps entries exactly recoverable without pinning them.");
       }
     }
+    if (pin) {
+      const additional = Math.max(0, pricedBytes(projectActiveContext(snapshot, nextProtection)) -
+        pricedBytes(projectActiveContext(snapshot, persistence.state!)));
+      admit({ action: "expand", ctx, foldId: ids.join(", "), requestedBytes: additional, children: [] });
+    }
     await persistManual(nextProtection, ctx);
+    if (pin) {
+      // A kept peek becomes an ordinary recoverable result.
+      const held = new Set(nextProtection.protected.map(objectRefKey));
+      for (const item of snapshot.mapped) {
+        if (!item.ref || !held.has(objectRefKey(item.ref))) continue;
+        const callId = ownValue(item.message, "toolCallId");
+        if (typeof callId === "string") ephemeralPeeks.delete(callId);
+      }
+    }
     emit("context.pin", {
       pin,
       ids: ids.join(","),
@@ -5250,6 +5230,7 @@ export function registerActiveContext(pi: any, options: {
               // identically to one that is still a placeholder, so the one surface built
               // to show a person the model's window could not show them this about it.
               expandedInContext: (state.expanded ?? []).includes(String(row.id)),
+            presentation: foldPresentation(fold, state, snapshot),
               // WHERE THE BRIEF CAME FROM. Given the campaign verdict on agent-written
               // briefs, which sentence is the runtime's and which is the model's is the
               // fact a person auditing this window most needs, and it was not on the
