@@ -16,7 +16,9 @@ jobs:
           node-version: 22
       - run: npm ci
       - name: Package source and installed test dependencies
-        run: tar -czf /tmp/pi-folds-workspace.tar.gz extensions tests scripts docs package.json package-lock.json eslint.config.js node_modules dev README.md
+        run: |
+          git rev-parse HEAD > source-revision.txt
+          tar -czf /tmp/pi-folds-workspace.tar.gz extensions tests scripts docs package.json package-lock.json eslint.config.js node_modules dev README.md source-revision.txt
       - uses: actions/upload-artifact@v4
         with:
           name: pi-folds-workspace
