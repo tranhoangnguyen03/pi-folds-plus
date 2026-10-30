@@ -136,7 +136,9 @@ test("base selection stays chronological; assessed selection keeps useful detail
   assert.equal(projection(snapshot, base.result.state), projection(snapshot, vanilla.state));
   const first = retention.retentionCandidates(snapshot, state)[0];
   const judgment = { id: first.id, sourceHash: first.sourceHash, relevance: "keep-original", reason: "Current bug evidence" };
+  const originalState = JSON.stringify(state);
   const planned = await select(snapshot, state, { applyTargetBytes, judgments: [judgment] });
+  assert.equal(JSON.stringify(state), originalState, "trial plans must not mutate the live queue");
   assert.equal(planned.held.length, 1);
   assert.ok(projection(snapshot, planned.result.state).includes("Bug evidence."));
   assert.ok(planned.bytes <= Math.max(6000, base.bytes));
@@ -153,6 +155,8 @@ test("automatic holds yield to the target and emergency selection; explicit prot
   const plan = await select(snapshot, state, { applyTargetBytes: bytes(snapshot, state) - 4000, judgments });
   assert.equal(plan.held.length, 0);
   assert.ok(plan.bytes < 4000);
+  const manual = await select(snapshot, state, { judgments, preserveHolds: true });
+  assert.equal(manual.held.length, 2, "manual commits preserve current automatic holds");
   const emergency = await select(snapshot, state, { judgments });
   assert.equal(emergency.held.length, 0);
   const explicit = folding.protectEvidence(snapshot, state, ["entry-1"], true);

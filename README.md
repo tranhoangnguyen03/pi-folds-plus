@@ -35,6 +35,8 @@ Focused tests import real runtime modules and exercise keep/release, clipping, n
 
 Run only one folding extension in a Pi session. No npm publication is part of this PR.
 
+The inherited benchmark tables below describe upstream pi-fold, not measurements of Plus.
+
 ---
 
 ## Upstream reference: pi-fold 4.3.0

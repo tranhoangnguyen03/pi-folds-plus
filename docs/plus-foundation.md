@@ -33,4 +33,12 @@ npm run lint
 
 Focused tests import real runtime modules and exercise keep/release, clipping, nested presentation, legacy state, queued refolds, unchanged base selection, target-sized retention, stale results and disabled services. See [upstream sync](UPSTREAM.md) for maintaining the fork.
 
+## Verification scope
+
+The inherited runtime suite and the focused Plus suite test this fork. The old
+experiment harness also binds published measurements to an exact historical runtime
+hash; those measurements remain upstream evidence, not results for Plus. CI checks
+that their archived report files still match the audited upstream commit. New Plus
+cost/recall claims require new runs once the provider adapters are ready.
+
 Run only one folding extension in a Pi session. No npm publication is part of this PR.

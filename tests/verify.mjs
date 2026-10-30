@@ -314,6 +314,7 @@ function makeRuntime(built, {
   preCommitNotice,
   noticeLeadShare,
   packageRegistration = false,
+  retention,
   parentSession = null,
   sessionFile = join(tmpdir(), "pi-fold-test-session.jsonl"),
   // One injection point for a durable write that FAILS. Persistence is the only place
@@ -454,6 +455,7 @@ function makeRuntime(built, {
     ...(providerInputBudget === undefined ? {} : { providerInputBudget }),
     ...(preCommitNotice === undefined ? {} : { preCommitNotice }),
     ...(noticeLeadShare === undefined ? {} : { noticeLeadShare }),
+    ...(retention === undefined ? {} : { retention }),
   };
   if (packageRegistration) {
     runtime.registration = piFold.registerPiFold(pi, registrationOptions);
@@ -3918,9 +3920,15 @@ async function gateTruthfulCapacityAdmission() {
   const alternatives = JSON.parse(refusal.slice(refusal.indexOf("[")));
   assert(alternatives.length >= 1, "A refusal named no constructible next action");
   assert(alternatives.some((item) => item.action === "peek" || item.action === "status"));
-  const expandRefusal = await toolCall(runtime, { action: "expand", id: big.id })
+  // Expansion validates parent order before admission. Use a root to test capacity.
+  const bigRoot = folds.find((fold) => fold.parentId === null && fold.sourceChars / bytesPerToken > headroom);
+  assert(bigRoot, "The admission fixture needs an expandable root larger than headroom");
+  const beforeRefusedExpand = json.stableStringify(materialized(runtime));
+  const expandRefusal = await toolCall(runtime, { action: "expand", id: bigRoot.id })
     .catch((error) => String(error));
   assert.match(expandRefusal, /expand of .* was refused/);
+  assert.equal(json.stableStringify(materialized(runtime)), beforeRefusedExpand,
+    "Refused expansion must not apply queued marks or change inclusion");
 
   // The narrowing the refusal offered is real: it executes and it fits.
   const slice = alternatives.find((item) => item.action === "peek" && item.bytes);
@@ -6110,6 +6118,8 @@ async function gateContextEventStream() {
   // for the snap below to start from. The boundary commit is not depth-bounded and would
   // otherwise leave the window with no raw span anywhere.
   const snapHold = [...built.turnEntries[5]];
+  // Keep now restores its source, so provide room for that restoration.
+  await measure(runtime, 40_000, 100_000, "room-for-instrumented-keep");
   await toolCall(runtime, { action: "pin", ids: snapHold });
   await runtimeCommit(runtime, { tokens: 94_000, contextWindow: 100_000 });
   // THE CORRECTION RECORD MOVES TO GATE 63, which owns re-boundary. It was produced by
@@ -7795,6 +7805,7 @@ async function gatePinnedShareCap() {
     .filter((fold) => !fold.parts.some((part) => part.kind === "fold"))
     .sort((left, right) => (left.sourceChars ?? 0) - (right.sourceChars ?? 0))[0];
   assert(smallest, "The fixture produced no leaf fold to pin");
+  await measure(runtime, 40_000, 100_000, "room-for-under-cap-keep");
   await toolCall(runtime, { action: "pin", ids: [smallest.id] });
   const pinned = materialized(runtime).protected.length;
   assert(pinned > 0, "A pin under the cap must still land");
@@ -14155,7 +14166,14 @@ async function gateFoldEditorReadsDeeperThanTheWindow() {
   // (f) e IS THE OTHER EXPANSION: it reaches state.expanded and therefore the projection,
   // and the row says so. This is the half that costs, and it must be provably distinct
   // from the reader's own open/close above.
-  assert.deepEqual(durable().expanded, [], "the fixture began with a fold already expanded");
+  assert.equal(durable().expanded.length, 1, "Release must leave the kept original visible");
+  const releasedView = json.stableStringify((await project(folded)).messages);
+  foldView.handleInput("e"); // Explicitly refold before exercising the independent restore action.
+  while (foldView.staging) await new Promise((r) => setTimeout(r, 5));
+  await settle();
+  assert.deepEqual(durable().expanded, []);
+  assert.notEqual(json.stableStringify((await project(folded)).messages), releasedView);
+
   const beforeExpand = json.stableStringify((await project(folded)).messages);
   foldView.handleInput("e");
   const expandDeadline = Date.now() + 10_000;
@@ -14165,7 +14183,7 @@ async function gateFoldEditorReadsDeeperThanTheWindow() {
     `e did not reach the runtime's expanded set: ${JSON.stringify(durable().expanded)}`);
   assert(json.stableStringify((await project(folded)).messages) !== beforeExpand,
     "e left the model's window unchanged, so it is the reader's expansion under another name");
-  assert(/raw in the model's window/.test(foldView.render(140).join("\n")),
+  assert(/agent sees original/.test(foldView.render(140).join("\n")),
     "an expanded fold renders identically to a placeholder, which is the fact the surface exists to show");
   foldView.handleInput("e");
   while (foldView.staging) await new Promise((r) => setTimeout(r, 5));
@@ -18277,7 +18295,14 @@ async function verifyForkRebasesFoldGraph({
   }
   const rebasedParent = rebasedFolds.folds.find((fold) => fold.kind === "consolidation" && fold.parentId === null);
   assert(rebasedParent, "the nested consolidation fold was not migrated");
-  assert.deepEqual(rebasedFolds.expanded, [rebasedParent.id], "expanded state was not re-keyed");
+  // Plus materializes legacy protection-driven visibility into explicit inclusion.
+  const protectedKeys = new Set(rebasedFolds.protected.map(json.objectRefKey));
+  const expectedExpanded = new Set([rebasedParent.id]);
+  for (const fold of rebasedFolds.folds) {
+    if (context.flattenFoldRefs(fold, rebasedFolds).some((ref) => protectedKeys.has(json.objectRefKey(ref)))) expectedExpanded.add(fold.id);
+  }
+  assert.deepEqual([...rebasedFolds.expanded].sort(), [...expectedExpanded].sort(),
+    "fork inclusion must preserve both expansion and legacy protected visibility");
   assert.equal(rebasedFolds.leases[rebasedParent.id], 1, "expand lease was not re-keyed");
   assert.equal(rebasedFolds.briefs[rebasedParent.id],
     "This child-owned override survives the fork.", "fold brief override was not re-keyed");
@@ -19882,6 +19907,7 @@ const gates = [
   [186, "Auto-compaction off permits explicit lossless salvage", gateAutoCompactionOffRecovery],
   [187, "Peek reads plain history while preserving exact restoration", gatePeekOmitsThinkingWithoutChangingSource],
   [188, "One tool result cannot wedge the session", gateOneToolResultCannotWedgeTheSession],
+  [189, "Plus retention follows upstream timing without blocking", gatePlusRetentionRuntime],
   [174, "A bounded delta run keeps the replay bounded", gateBoundedDeltaRun],
   [175, "A fold is proven once per replay", gateFoldProvenOncePerReplay],
   [176, "Host peers fold, retrieve and reload in the real SDK", gateHostPeersAndSdkSession],
@@ -19913,6 +19939,60 @@ const gates = [
   // is gate 92's (the pinned-share cap refuses) and gate 89's (protect is a durable pin),
   // both of which drive it on their own fixtures. The number stays spent.
 ];
+
+async function gatePlusRetentionRuntime() {
+  let enabled = true;
+  const requests = [];
+  const runtime = makeRuntime(makeFixture({ turns: 14, resultChars: 9000, contextWindow: 100_000 }), {
+    packageRegistration: true,
+    retention: {
+      enabled: () => enabled,
+      assess: async (request) => {
+        requests.push(request);
+        return request.candidates.map((candidate, index) => ({
+          id: candidate.id, sourceHash: candidate.sourceHash,
+          relevance: index === 0 ? "keep-original" : "ordinary", reason: "Fixture evidence",
+        }));
+      },
+    },
+  });
+  await startRuntime(runtime);
+  await measure(runtime, 60_000, 100_000, "below-approach");
+  await project(runtime); await settle();
+  assert.equal(requests.length, 0);
+  // Descriptor capacity reserves 10%, so 70% of its serving budget is 63,000.
+  await measure(runtime, 64_000, 100_000, "approaching");
+  await project(runtime); await settle();
+  assert.equal(requests.length, 1);
+  await project(runtime); await settle();
+  assert.equal(requests.length, 1, "unchanged approach must not repeat inference");
+  assert(requests[0].candidates.length > 0);
+  assert(requests[0].candidates.every((candidate) => candidate.sourceHash && candidate.sourceIds.length));
+  await measure(runtime, 73_000, 100_000, "ordinary-commit");
+  await project(runtime); await settle();
+  assert(contextEvents(runtime).some((event) => event.kind === "context.commit" && !event.deferred),
+    "Retention must not block upstream's ordinary commit");
+  assert(!contextEvents(runtime).some((event) => event.kind === "context.suspend"));
+  const beforeOff = requests.length;
+  enabled = false;
+  await measure(runtime, 75_000, 100_000, "disabled");
+  await project(runtime); await settle();
+  assert.equal(requests.length, beforeOff, "disabled service must not issue calls");
+
+  let finish;
+  const slow = makeRuntime(makeFixture({ turns: 14, resultChars: 9000, contextWindow: 100_000 }), {
+    retention: { assess: () => new Promise((resolve) => { finish = resolve; }) },
+  });
+  await startRuntime(slow);
+  await measure(slow, 73_000, 100_000, "jump-over-approach");
+  await project(slow); await settle();
+  const committed = materialized(slow);
+  assert(committed.folds.length > 0, "An unfinished helper must not prevent folding");
+  finish?.([]); await settle();
+  assert.deepEqual(materialized(slow).expanded, committed.expanded,
+    "A late response must not restore committed source");
+  return { oncePerApproach: true, disabledNoCalls: true, slowHelperNonblocking: true, exactSourceBinding: true };
+}
 
 const gateFilter = (process.env.GATES ?? "")
   .split(",")

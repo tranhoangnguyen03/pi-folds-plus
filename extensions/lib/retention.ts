@@ -1,5 +1,5 @@
 import { evidenceSha256, objectRefKey, sha256Value } from "../json.ts";
-import { messageRole } from "./canonical.ts";
+import { clone, messageRole } from "./canonical.ts";
 import { projectActiveContext } from "./folding.ts";
 import { exactMapped, pricedBytes } from "./measurement.ts";
 import { flattenFoldRefs } from "./persistence.ts";
@@ -126,10 +126,19 @@ export class RetentionAssessment {
       this.error = error instanceof Error ? error.message : String(error);
       if (!this.failed) {
         this.failed = true;
-        onFailure?.(error);
-        this.service?.onError?.(error);
+        try { onFailure?.(error); } catch { /* UI failure must not reject the helper promise. */ }
+        try { this.service?.onError?.(error); } catch { /* The recorded error remains inspectable. */ }
       }
     });
+  }
+
+  /** Explicit release cancels this approach's inference without starting another. */
+  invalidate(): void {
+    this.controller?.abort();
+    this.controller = null;
+    this.epoch += 1;
+    this.ready = [];
+    this.applied = [];
   }
 
   status() { return { enabled: this.enabled(), error: this.error, judgments: this.ready.length, held: this.applied.length }; }
@@ -166,6 +175,7 @@ export async function selectCommit(input: {
   clipThreshold: number;
   blacklist: ReadonlySet<string>;
   judgments?: RetentionJudgment[];
+  preserveHolds?: boolean;
 }) {
   const { snapshot, state } = input;
   const candidates = new Map((input.judgments?.length ? retentionCandidates(snapshot, state) : [])
@@ -180,7 +190,7 @@ export async function selectCommit(input: {
   const evaluate = async (holds: PendingMark[]) => {
     const protectedRefs = new Map(state.protected.map((ref) => [objectRefKey(ref), ref]));
     for (const mark of holds) for (const ref of markSpanRefs(state, mark).refs) protectedRefs.set(objectRefKey(ref), ref);
-    const guarded = { ...state, protected: [...protectedRefs.values()] };
+    const guarded = { ...clone(state), protected: [...protectedRefs.values()] };
     let result = await commitPendingMarks({
       snapshot, state: guarded, generation: input.generation, retainIneligible: true,
       ...(input.applyTargetBytes === undefined ? {} : { applyTargetBytes: input.applyTargetBytes }),
@@ -220,6 +230,7 @@ export async function selectCommit(input: {
       bytes: pricedBytes(projectActiveContext(snapshot, result.state)) };
   };
 
+  if (input.preserveHolds && keep.length) return { ...(await evaluate(keep)), held: keep.map((mark) => judgments.get(mark.id)!) };
   const baseline = await evaluate([]);
   if (input.applyTargetBytes === undefined || !keep.length) return { ...baseline, held: [] as RetentionJudgment[] };
   const target = Math.max(0, pricedBytes(projectActiveContext(snapshot, state)) - input.applyTargetBytes);

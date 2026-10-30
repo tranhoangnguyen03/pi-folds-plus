@@ -169,7 +169,6 @@ import {
   commitCoverage,
   windowClaims,
   commitPendingMarks,
-  toolClipAdditions,
   consolidationMarks,
   ephemeralPeekMarks,
   epochCommitDue,
@@ -3178,6 +3177,7 @@ export function registerActiveContext(pi: any, options: {
       clipThreshold: toolFoldThreshold,
       blacklist: blacklistAutoFoldTools,
       judgments: retention.judgments(assessmentKey(snapshot, lifecycle.generation), userRequested),
+      preserveHolds: userRequested,
     });
     let result = selection.result;
     closingAdded += selection.closingAdded;
@@ -3227,7 +3227,7 @@ export function registerActiveContext(pi: any, options: {
       refold_marks: refoldAdded,
       consolidation_marks: consolidationAdded,
       closing_consolidation_marks: closingAdded,
-      retention_kept: selection.held.map((item) => item.id),
+      retention_kept: selection.held.map((item) => item.id).join(","),
       absorbed_wedges: wedges.absorbed.length,
       clipped_results: clippedResults,
       adopted_records: adoption.adopted.length,
@@ -4263,7 +4263,7 @@ export function registerActiveContext(pi: any, options: {
     ctx: any,
   ): Promise<unknown[]> => {
     const before = persistence.state!;
-    let candidate = before;
+    let candidate = clone(before);
     let epochApplied: unknown[] = [];
     if (expand && pendingMarks(candidate).length) {
       const result = await commitPendingMarks({ snapshot, state: candidate,
@@ -4280,7 +4280,7 @@ export function registerActiveContext(pi: any, options: {
       next = withExpandLease(next, id);
       const additional = Math.max(0,
         pricedBytes(projectActiveContext(snapshot, next)) - pricedBytes(projectActiveContext(snapshot, before)));
-      admit({ action: "expand", ctx, foldId: id, requestedBytes: additional, children: [] });
+      if (additional > 0) admit({ action: "expand", ctx, foldId: id, requestedBytes: additional, children: [] });
     } else {
       const leases = { ...next.leases };
       delete leases[id];
@@ -4320,9 +4320,10 @@ export function registerActiveContext(pi: any, options: {
     if (pin) {
       const additional = Math.max(0, pricedBytes(projectActiveContext(snapshot, nextProtection)) -
         pricedBytes(projectActiveContext(snapshot, persistence.state!)));
-      admit({ action: "expand", ctx, foldId: ids.join(", "), requestedBytes: additional, children: [] });
+      if (additional > 0) admit({ action: "expand", ctx, foldId: ids.join(", "), requestedBytes: additional, children: [] });
     }
     await persistManual(nextProtection, ctx);
+    if (!pin) retention.invalidate();
     if (pin) {
       // A kept peek becomes an ordinary recoverable result.
       const held = new Set(nextProtection.protected.map(objectRefKey));
@@ -5230,7 +5231,7 @@ export function registerActiveContext(pi: any, options: {
               // identically to one that is still a placeholder, so the one surface built
               // to show a person the model's window could not show them this about it.
               expandedInContext: (state.expanded ?? []).includes(String(row.id)),
-            presentation: foldPresentation(fold, state, snapshot),
+              presentation: foldPresentation(fold, state, snapshot),
               // WHERE THE BRIEF CAME FROM. Given the campaign verdict on agent-written
               // briefs, which sentence is the runtime's and which is the model's is the
               // fact a person auditing this window most needs, and it was not on the
