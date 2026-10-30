@@ -32,7 +32,7 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add extensions tests docs README.md
-          git rm dev/build-foundation.py dev/prepare-build.py dev/finalize-foundation.py
+          git rm -f dev/build-foundation.py dev/prepare-build.py dev/finalize-foundation.py
           git commit -m 'fix: preserve the live queue and verify complete retention behavior'
           git push origin HEAD:work/context-foundation
       - run: npm ci
