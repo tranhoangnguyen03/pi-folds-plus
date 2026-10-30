@@ -217,6 +217,7 @@ export function markEligibility(
   if (mark.mark === "refold") {
     const fold = state.folds.find((item) => item.id === mark.id);
     if (!fold || !foldInterval(fold, state, snapshot)) return "unfulfillable";
+    if (fold && (refsProtected(flattenFoldRefs(fold, state), state, snapshot) || state.leases[mark.id])) return "protected";
     return state.expanded.includes(mark.id) ? "eligible" : "unfulfillable";
   }
   const span = markSpanRefs(state, mark);
@@ -969,6 +970,8 @@ export async function commitPendingMarks(input: {
    * rollback is not housekeeping and takes everything it can.
    */
   applyTargetBytes?: number;
+  /** Optional relevance order; equal priorities retain native source order. */
+  priority?: (mark: PendingMark) => number;
 }): Promise<CommitEpochResult> {
   // THE CURRENT-TURN GUARD IS DELETED (Shane, 2026-08-23: "you're using turns as the
   // boundaries, which should not be the case. It should be at the most granular level,
@@ -1012,6 +1015,7 @@ export async function commitPendingMarks(input: {
   const applyStart = new Map(marks.map((mark) =>
     [pendingMarkKey(mark), markSpanStart(input.snapshot, input.state, mark)] as const));
   const base = [...marks].sort((left, right) =>
+    (input.priority ? input.priority(left) - input.priority(right) : 0) ||
     applyStart.get(pendingMarkKey(left))! - applyStart.get(pendingMarkKey(right))! ||
     left.id.localeCompare(right.id));
   const ordered: PendingMark[] = [];

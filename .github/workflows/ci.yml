@@ -7,12 +7,18 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: verify-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
+      - name: Check out repository and upstream history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -29,28 +35,36 @@ jobs:
           npm install --global --prefix "$HOME/.npm-global" \
             "@earendil-works/pi-coding-agent@$pi_version" --ignore-scripts --no-audit --no-fund
 
-      # The experiment now runs each arm inside a bubblewrap mount namespace, and
-      # gate 73 drives the real thing rather than matching source: it builds the
-      # argv, starts the sandbox and asks the process inside what it can see. That
-      # needs bubblewrap and unprivileged user namespaces on the runner.
-      - name: Install bubblewrap
+      - name: Install sandbox support for upstream experiment checks
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap
-          # Ubuntu 24.04 ships AppArmor's restriction on unprivileged user
-          # namespaces, which is what a runner rejects with "setting up uid map:
-          # Permission denied". The workstation has it off already.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-          bwrap --version
           bwrap --unshare-all --share-net --dev /dev --proc /proc --ro-bind /usr /usr \
             --ro-bind-try /bin /bin --ro-bind-try /lib /lib --ro-bind-try /lib64 /lib64 \
-            -- /usr/bin/true && echo "unprivileged namespaces work"
+            -- /usr/bin/true
 
       - name: Lint
         run: npm run lint
 
-      - name: Test
+      - name: Focused Plus runtime checks
+        run: npm run test:plus
+
+      - name: Full runtime regression suite
         run: npm test
 
-      - name: Verify experiment harness
-        run: node scripts/verify_pi_context_experiment.mjs
+      - name: Keep historical measurements and their verifier unchanged
+        run: |
+          git diff --exit-code 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664 -- \
+            docs/fold_vs_compaction scripts/verify_pi_context_experiment.mjs \
+            scripts/lib/pi_context_attribution.mjs
+
+      # Published upstream results bind exact runtime hashes. Verify them with
+      # that runtime, rather than relabeling old measurements as Plus results.
+      - name: Verify historical upstream experiment harness
+        run: |
+          baseline="$RUNNER_TEMP/pi-fold-4.3.0"
+          git worktree add --detach "$baseline" 1f739edab42f3ba34ec22c4fcf24c8b0a4ad9664
+          trap 'git worktree remove --force "$baseline"' EXIT
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$baseline/node_modules"
+          (cd "$baseline" && node scripts/verify_pi_context_experiment.mjs)

@@ -41,6 +41,7 @@ export interface FoldEditorBlock {
 	 *  right now, reclaimed at the next commit unless pinned. Distinct in every way from
 	 *  the view's own open/closed state, which the reader owns and the model never sees. */
 	expandedInContext?: boolean;
+	presentation?: "original" | "clipped" | "folded" | "mixed";
 	sourceCount?: number;
 	rolesSummary?: string;
 	/** Estimated tokens this staged mark frees at the next commit; proposed blocks only. */
@@ -137,6 +138,7 @@ export function buildFoldEditorData(
 			id: string; kind: string; brief: string; sourceCount: number;
 			startPosition: number; endPosition: number;
 			provenance?: string; expandedInContext?: boolean;
+			presentation?: "original" | "clipped" | "folded" | "mixed";
 			entries: FoldEditorEntry[];
 		}>;
 		pendingMarkRefs: () => Array<{ id: string; origin: string; brief: string; entryIds: string[] }>;
@@ -156,6 +158,7 @@ export function buildFoldEditorData(
 			brief: row.brief,
 			provenance: row.provenance,
 			expandedInContext: row.expandedInContext,
+			presentation: row.presentation,
 			sourceCount: row.sourceCount,
 			entries: row.entries,
 			children: [],
@@ -525,9 +528,8 @@ export class FoldEditorView {
 		// identically to a placeholder; and a brief the MODEL wrote is a different kind of
 		// claim from one the runtime derived, which is the fact the campaign verdict made
 		// load-bearing. Neither is stated with an id: the badge is the word.
-		const contextBadge = block.expandedInContext
-			? ` ${this.color("warning", "· raw in the model's window")}`
-			: "";
+		const presentation = block.presentation ?? (block.expandedInContext ? "original" : "folded");
+		const contextBadge = ` ${this.color("warning", `· agent sees ${presentation}`)}`;
 		const provenanceBadge = block.provenance && block.provenance !== "deterministic"
 			? ` ${this.color("accent", `· brief ${block.provenance}`)}`
 			: "";
