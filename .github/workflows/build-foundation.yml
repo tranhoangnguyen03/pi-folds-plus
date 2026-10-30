@@ -4,14 +4,17 @@ on:
     branches: [work/context-foundation]
     paths:
       - dev/build-foundation.py
+      - dev/prepare-build.py
       - .github/workflows/build-foundation.yml
   workflow_dispatch:
 permissions:
   contents: write
-concurrency: foundation-integration
+concurrency:
+  group: foundation-integration
+  cancel-in-progress: true
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,7 +24,9 @@ jobs:
         with:
           node-version: 22
       - name: Apply reviewed source integration
-        run: python3 dev/build-foundation.py
+        run: |
+          python3 dev/prepare-build.py
+          python3 dev/build-foundation.py
       - name: Commit source integration
         run: |
           git config user.name 'github-actions[bot]'
@@ -43,6 +48,5 @@ jobs:
           npm install --global --prefix "$HOME/.npm-global" "@earendil-works/pi-coding-agent@$pi_version" --ignore-scripts --no-audit --no-fund
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Upstream regression suite
         run: npm test
